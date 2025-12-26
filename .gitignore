@@ -1,0 +1,27 @@
+# Binaries
+wyze-plugin
+wyze-plugin-*
+*.exe
+
+# Test output
+*.test
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# TUTK library
+tutk-ioctl*

@@ -1,0 +1,62 @@
+id: wyze
+name: Wyze
+version: 1.0.0
+description: Wyze camera integration using TUTK library
+author: NVR System
+homepage: https://github.com/nvr-plugins/wyze
+license: MIT
+
+runtime:
+  type: binary
+  binary: wyze-plugin
+
+capabilities:
+  - video
+  - audio
+  - two_way_audio
+  - motion
+  - snapshot
+
+dependencies:
+  - name: tutk
+    type: library
+    url: https://github.com/mrlt8/docker-wyze-bridge/releases/download/tutk/tutk-ioctl-{os}-{arch}.tar.gz
+    platforms:
+      - linux_amd64
+      - linux_arm64
+      - darwin_amd64
+      - darwin_arm64
+
+config_schema:
+  type: object
+  properties:
+    email:
+      type: string
+      description: Wyze account email
+    password:
+      type: string
+      description: Wyze account password
+    key_id:
+      type: string
+      description: Wyze API key ID (optional)
+    api_key:
+      type: string
+      description: Wyze API key (optional)
+    totp_key:
+      type: string
+      description: TOTP secret for 2FA (optional)
+    cameras:
+      type: array
+      description: Specific cameras to enable (empty for all)
+      items:
+        type: object
+        properties:
+          mac:
+            type: string
+            description: Camera MAC address
+          name:
+            type: string
+            description: Custom name
+  required:
+    - email
+    - password
