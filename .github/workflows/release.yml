@@ -1,0 +1,142 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION_NUM=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION_NUM }}" \
+            -o wyze-plugin-${{ matrix.suffix }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wyze-plugin-${{ matrix.suffix }}
+          path: wyze-plugin-${{ matrix.suffix }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION_NUM=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+
+          # Create archives for each platform
+          for dir in dist/*/; do
+            name=$(basename "$dir")
+            binary=$(ls "$dir")
+
+            # Copy binary
+            cp "$dir/$binary" "release/$binary"
+            chmod +x "release/$binary"
+
+            # Create tarball with manifest
+            mkdir -p "pkg"
+            cp "$dir/$binary" "pkg/wyze-plugin"
+            cp manifest.yaml "pkg/"
+
+            # Add version to manifest
+            sed -i "s/version:.*/version: ${{ steps.version.outputs.VERSION_NUM }}/" pkg/manifest.yaml
+
+            tar -czf "release/${name}-${{ steps.version.outputs.VERSION }}.tar.gz" -C pkg .
+            rm -rf pkg
+          done
+
+          ls -la release/
+
+      - name: Generate changelog
+        run: |
+          echo "## Wyze Plugin ${{ steps.version.outputs.VERSION }}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### Features" >> CHANGELOG.md
+          echo "- Wyze camera integration with RTSP support" >> CHANGELOG.md
+          echo "- Motion detection events" >> CHANGELOG.md
+          echo "- Cloud event synchronization" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### Supported Devices" >> CHANGELOG.md
+          echo "- Wyze Cam v2/v3" >> CHANGELOG.md
+          echo "- Wyze Cam Pan" >> CHANGELOG.md
+          echo "- Wyze Cam Outdoor" >> CHANGELOG.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Wyze Plugin ${{ steps.version.outputs.VERSION }}"
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          body_path: CHANGELOG.md
+          files: |
+            release/*.tar.gz
+            release/wyze-plugin-*
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.VERSION, 'alpha') || contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'rc') }}
