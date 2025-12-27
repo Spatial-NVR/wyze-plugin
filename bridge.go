@@ -163,7 +163,7 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 
 	// Wait for bridge to be ready
 	if err := m.waitForReady(ctx); err != nil {
-		m.Stop()
+		_ = m.Stop()
 		return fmt.Errorf("bridge failed to start: %w", err)
 	}
 
@@ -247,7 +247,7 @@ func (m *BridgeManager) Stop() error {
 
 	if m.cmd != nil && m.cmd.Process != nil {
 		// Send SIGTERM first
-		m.cmd.Process.Signal(os.Interrupt)
+		_ = m.cmd.Process.Signal(os.Interrupt)
 
 		// Wait with timeout
 		done := make(chan error, 1)
@@ -258,7 +258,7 @@ func (m *BridgeManager) Stop() error {
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			m.cmd.Process.Kill()
+			_ = m.cmd.Process.Kill()
 		}
 	}
 

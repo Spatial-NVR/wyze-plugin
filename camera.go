@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"sync"
@@ -18,9 +17,6 @@ type WyzeCamera struct {
 	// TUTK connection state
 	connected bool
 	p2pToken  string
-
-	// Stream ports (when connected via TUTK)
-	rtspPort int
 
 	online   bool
 	lastSeen time.Time
@@ -207,9 +203,4 @@ func sanitizeName(name string) string {
 		}
 	}
 	return result
-}
-
-// encodeBase64 encodes bytes to base64 string
-func encodeBase64(data []byte) string {
-	return base64.StdEncoding.EncodeToString(data)
 }

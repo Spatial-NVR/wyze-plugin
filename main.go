@@ -173,7 +173,7 @@ func (p *Plugin) HandleRequest(req JSONRPCRequest) JSONRPCResponse {
 	case "initialize":
 		var config map[string]interface{}
 		if req.Params != nil {
-			json.Unmarshal(req.Params, &config)
+			_ = json.Unmarshal(req.Params, &config)
 		}
 		if err := p.Initialize(ctx, config); err != nil {
 			resp.Error = &JSONRPCError{Code: -32603, Message: err.Error()}
