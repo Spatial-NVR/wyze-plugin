@@ -1,0 +1,345 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+// BridgeManager manages the wyze-bridge subprocess
+type BridgeManager struct {
+	bridgePath string
+	dataPath   string
+
+	cmd    *exec.Cmd
+	stdout io.ReadCloser
+	stderr io.ReadCloser
+
+	rtspPort int
+	webPort  int
+
+	running   bool
+	runningMu sync.RWMutex
+
+	stopCh chan struct{}
+}
+
+// BridgeConfig holds configuration for the wyze-bridge
+type BridgeConfig struct {
+	Email    string
+	Password string
+	KeyID    string
+	APIKey   string
+	TOTPKey  string
+
+	// Optional: filter specific cameras
+	Cameras []string
+
+	// Ports
+	RTSPPort int // Default: 8554
+	WebPort  int // Default: 5000
+
+	// Data path for persistent storage
+	DataPath string
+}
+
+// NewBridgeManager creates a new bridge manager
+func NewBridgeManager(pluginPath string, config BridgeConfig) *BridgeManager {
+	rtspPort := config.RTSPPort
+	if rtspPort == 0 {
+		rtspPort = 8554
+	}
+
+	webPort := config.WebPort
+	if webPort == 0 {
+		webPort = 5000
+	}
+
+	dataPath := config.DataPath
+	if dataPath == "" {
+		dataPath = filepath.Join(pluginPath, "data")
+	}
+
+	return &BridgeManager{
+		bridgePath: filepath.Join(pluginPath, "wyze-bridge", "app"),
+		dataPath:   dataPath,
+		rtspPort:   rtspPort,
+		webPort:    webPort,
+		stopCh:     make(chan struct{}),
+	}
+}
+
+// Start launches the wyze-bridge subprocess
+func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
+	m.runningMu.Lock()
+	if m.running {
+		m.runningMu.Unlock()
+		return nil
+	}
+	m.runningMu.Unlock()
+
+	// Ensure data directory exists
+	if err := os.MkdirAll(m.dataPath, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	// Check if Python is available
+	pythonPath, err := exec.LookPath("python3")
+	if err != nil {
+		pythonPath, err = exec.LookPath("python")
+		if err != nil {
+			return fmt.Errorf("python not found: please install Python 3")
+		}
+	}
+
+	// Install requirements if needed
+	if err := m.ensureRequirements(ctx, pythonPath); err != nil {
+		log.Printf("Warning: failed to install requirements: %v", err)
+	}
+
+	// Build environment variables for wyze-bridge
+	env := os.Environ()
+	env = append(env,
+		fmt.Sprintf("WYZE_EMAIL=%s", config.Email),
+		fmt.Sprintf("WYZE_PASSWORD=%s", config.Password),
+		fmt.Sprintf("RTSP_PORT=%d", m.rtspPort),
+		fmt.Sprintf("WEB_PORT=%d", m.webPort),
+		"ENABLE_AUDIO=True",
+		"ON_DEMAND=False", // Keep streams active
+		"SNAPSHOT=API",
+		"QUALITY=HD",
+	)
+
+	if config.KeyID != "" {
+		env = append(env, fmt.Sprintf("API_ID=%s", config.KeyID))
+	}
+	if config.APIKey != "" {
+		env = append(env, fmt.Sprintf("API_KEY=%s", config.APIKey))
+	}
+	if config.TOTPKey != "" {
+		env = append(env, fmt.Sprintf("TOTP_KEY=%s", config.TOTPKey))
+	}
+
+	// Camera filter
+	if len(config.Cameras) > 0 {
+		for _, cam := range config.Cameras {
+			env = append(env, fmt.Sprintf("FILTER_NAMES=%s", cam))
+		}
+	}
+
+	// Start the bridge
+	m.cmd = exec.CommandContext(ctx, pythonPath, "wyze_bridge.py")
+	m.cmd.Dir = m.bridgePath
+	m.cmd.Env = env
+
+	m.stdout, err = m.cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	m.stderr, err = m.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	if err := m.cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start wyze-bridge: %w", err)
+	}
+
+	m.runningMu.Lock()
+	m.running = true
+	m.runningMu.Unlock()
+
+	// Start log readers
+	go m.readOutput(m.stdout, "stdout")
+	go m.readOutput(m.stderr, "stderr")
+
+	// Wait for bridge to be ready
+	if err := m.waitForReady(ctx); err != nil {
+		m.Stop()
+		return fmt.Errorf("bridge failed to start: %w", err)
+	}
+
+	log.Printf("Wyze-bridge started successfully on RTSP port %d", m.rtspPort)
+	return nil
+}
+
+// ensureRequirements installs Python dependencies if needed
+func (m *BridgeManager) ensureRequirements(ctx context.Context, pythonPath string) error {
+	reqPath := filepath.Join(m.bridgePath, "requirements.txt")
+	if _, err := os.Stat(reqPath); os.IsNotExist(err) {
+		return nil // No requirements file
+	}
+
+	// Check if flask is importable (quick check if deps are installed)
+	checkCmd := exec.CommandContext(ctx, pythonPath, "-c", "import flask")
+	if checkCmd.Run() == nil {
+		return nil // Already installed
+	}
+
+	log.Println("Installing wyze-bridge dependencies...")
+
+	cmd := exec.CommandContext(ctx, pythonPath, "-m", "pip", "install", "-r", reqPath, "--quiet")
+	cmd.Dir = m.bridgePath
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pip install failed: %w\n%s", err, string(output))
+	}
+
+	return nil
+}
+
+// waitForReady waits for the bridge to be ready to accept connections
+func (m *BridgeManager) waitForReady(ctx context.Context) error {
+	timeout := time.After(60 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	url := fmt.Sprintf("http://localhost:%d/api/cameras", m.webPort)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for bridge to start")
+		case <-ticker.C:
+			resp, err := http.Get(url)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == 200 || resp.StatusCode == 401 {
+					// Bridge is ready (401 means auth required but server is up)
+					return nil
+				}
+			}
+
+			// Check if process is still running
+			m.runningMu.RLock()
+			running := m.running
+			m.runningMu.RUnlock()
+
+			if !running {
+				return fmt.Errorf("bridge process exited unexpectedly")
+			}
+		}
+	}
+}
+
+// Stop shuts down the wyze-bridge subprocess
+func (m *BridgeManager) Stop() error {
+	m.runningMu.Lock()
+	if !m.running {
+		m.runningMu.Unlock()
+		return nil
+	}
+	m.running = false
+	m.runningMu.Unlock()
+
+	close(m.stopCh)
+
+	if m.cmd != nil && m.cmd.Process != nil {
+		// Send SIGTERM first
+		m.cmd.Process.Signal(os.Interrupt)
+
+		// Wait with timeout
+		done := make(chan error, 1)
+		go func() {
+			done <- m.cmd.Wait()
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			m.cmd.Process.Kill()
+		}
+	}
+
+	log.Println("Wyze-bridge stopped")
+	return nil
+}
+
+// IsRunning returns whether the bridge is running
+func (m *BridgeManager) IsRunning() bool {
+	m.runningMu.RLock()
+	defer m.runningMu.RUnlock()
+	return m.running
+}
+
+// GetRTSPURL returns the RTSP URL for a camera
+func (m *BridgeManager) GetRTSPURL(cameraName string, substream bool) string {
+	name := sanitizeName(cameraName)
+	if substream {
+		return fmt.Sprintf("rtsp://localhost:%d/%s_sub", m.rtspPort, name)
+	}
+	return fmt.Sprintf("rtsp://localhost:%d/%s", m.rtspPort, name)
+}
+
+// GetSnapshotURL returns the snapshot URL for a camera
+func (m *BridgeManager) GetSnapshotURL(cameraName string) string {
+	name := sanitizeName(cameraName)
+	return fmt.Sprintf("http://localhost:%d/img/%s.jpg", m.webPort, name)
+}
+
+// readOutput reads and logs output from the bridge process
+func (m *BridgeManager) readOutput(r io.Reader, name string) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			log.Printf("[wyze-bridge %s] %s", name, string(buf[:n]))
+		}
+		if err != nil {
+			if err != io.EOF {
+				log.Printf("[wyze-bridge] %s read error: %v", name, err)
+			}
+			return
+		}
+
+		// Check if we should stop
+		select {
+		case <-m.stopCh:
+			return
+		default:
+		}
+	}
+}
+
+// GetCameras returns the list of cameras from the bridge API
+func (m *BridgeManager) GetCameras(ctx context.Context) ([]BridgeCamera, error) {
+	url := fmt.Sprintf("http://localhost:%d/api/cameras", m.webPort)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cameras from bridge: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("bridge API returned status %d", resp.StatusCode)
+	}
+
+	// Parse response - bridge returns camera list
+	// For now, return empty - we'll use the main Wyze API for camera list
+	return nil, nil
+}
+
+// BridgeCamera represents a camera from the bridge API
+type BridgeCamera struct {
+	Name      string `json:"name"`
+	Model     string `json:"model"`
+	Connected bool   `json:"connected"`
+}

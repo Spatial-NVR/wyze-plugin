@@ -1,15 +1,30 @@
 # Wyze Plugin for SpatialNVR
 
-A plugin for integrating Wyze cameras with SpatialNVR using the TUTK library for local streaming.
+A plugin for integrating Wyze cameras with SpatialNVR. This plugin bundles [docker-wyze-bridge](https://github.com/mrlt8/docker-wyze-bridge) to provide local RTSP streaming from Wyze cameras.
 
 ## Features
 
 - Wyze account authentication (including 2FA/TOTP)
 - Automatic camera discovery from Wyze account
-- Local streaming via TUTK library (no cloud dependency for video)
+- **Bundled wyze-bridge** for TUTK to RTSP conversion (no separate container needed)
+- Local streaming via RTSP (low latency)
 - PTZ control for Pan cameras
 - Motion detection events
-- Low latency streaming
+- Snapshot capture
+
+## How It Works
+
+This plugin runs docker-wyze-bridge as an integrated subprocess:
+
+1. **Login**: Authenticates with Wyze cloud API to get device list
+2. **Bridge Start**: Spawns wyze-bridge Python process as a subprocess
+3. **TUTK Connection**: wyze-bridge connects to cameras via P2P (TUTK protocol)
+4. **RTSP Streaming**: Exposes camera streams as standard RTSP URLs
+
+## Requirements
+
+- **Python 3.8+**: Required for running the bundled wyze-bridge
+- Wyze account with cameras
 
 ## Supported Devices
 
@@ -40,23 +55,27 @@ A plugin for integrating Wyze cameras with SpatialNVR using the TUTK library for
    tar -xzf wyze-plugin-*.tar.gz -C /data/plugins/wyze/
    ```
 
-3. Restart SpatialNVR
+3. Ensure Python dependencies are installed:
+   ```bash
+   pip3 install -r /data/plugins/wyze/wyze-bridge/app/requirements.txt
+   ```
 
-4. The TUTK library will be downloaded automatically on first run
+4. Restart SpatialNVR
 
 ### Building from Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/Spatial-NVR/wyze-plugin.git
+# Clone the repository with submodules
+git clone --recurse-submodules https://github.com/Spatial-NVR/wyze-plugin.git
 cd wyze-plugin
 
 # Build the plugin
-go build -o wyze-plugin .
+./build.sh
 
-# Copy to plugins directory
+# Copy to plugins directory (including wyze-bridge)
 mkdir -p /data/plugins/wyze
 cp wyze-plugin manifest.yaml /data/plugins/wyze/
+cp -r wyze-bridge /data/plugins/wyze/
 ```
 
 ## Configuration
@@ -85,6 +104,9 @@ plugins:
       api_key: your_api_key
       # Optional: TOTP secret for 2FA
       totp_key: your_totp_secret
+      # Optional: Custom ports
+      rtsp_port: 8554
+      web_port: 5000
       # Optional: Filter specific cameras by MAC
       cameras:
         - mac: AABBCCDDEEFF
@@ -115,54 +137,48 @@ If your Wyze account has 2FA enabled:
 2. Add it as `totp_key` in the config
 3. The plugin will automatically generate codes for login
 
+## Stream Access
+
+Streams are provided via RTSP through the bundled wyze-bridge:
+
+- **Main stream (HD)**: `rtsp://localhost:8554/{camera_name}`
+- **Sub stream (SD)**: `rtsp://localhost:8554/{camera_name}_sub`
+- **Snapshot**: `http://localhost:5000/img/{camera_name}.jpg`
+
+Camera names are derived from Wyze nicknames with spaces and special characters replaced.
+
 ## API Reference
 
 ### Plugin RPC Methods
 
 | Method | Description |
 |--------|-------------|
-| `initialize` | Initialize with Wyze credentials |
-| `shutdown` | Graceful shutdown |
-| `health` | Get plugin health status |
+| `initialize` | Initialize with Wyze credentials, starts bridge |
+| `shutdown` | Stop bridge and cleanup |
+| `health` | Get plugin health status (includes bridge status) |
 | `discover_cameras` | List all Wyze cameras from account |
 | `add_camera` | Add a camera by MAC address |
 | `remove_camera` | Remove a camera |
 | `list_cameras` | List configured cameras |
 | `get_camera` | Get camera details |
 | `ptz_control` | Send PTZ commands (Pan cameras only) |
-| `get_snapshot` | Capture from stream |
+| `get_snapshot` | Get snapshot URL |
 
-### Discovering Cameras
+### Health Status
 
-```bash
-curl http://localhost:12000/api/v1/plugins/wyze/discover
-```
+The health endpoint includes bridge status:
 
-Response:
 ```json
 {
-  "cameras": [
-    {
-      "mac": "AABBCCDDEEFF",
-      "nickname": "Front Door",
-      "model": "WYZE_CAKP2JFUS",
-      "model_name": "Wyze Cam v3",
-      "is_online": true,
-      "has_ptz": false
-    }
-  ]
+  "state": "healthy",
+  "message": "2/2 cameras online",
+  "details": {
+    "cameras_online": 2,
+    "cameras_total": 2,
+    "authenticated": true,
+    "bridge_running": true
+  }
 }
-```
-
-### Adding a Camera
-
-```bash
-curl -X POST http://localhost:12000/api/v1/plugins/wyze/cameras \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mac": "AABBCCDDEEFF",
-    "name": "Front Door"
-  }'
 ```
 
 ### PTZ Control (Pan Cameras)
@@ -178,38 +194,42 @@ curl -X POST http://localhost:12000/api/v1/plugins/wyze/cameras/{camera_id}/ptz 
 
 Commands: `up`, `down`, `left`, `right`, `stop`
 
-## Stream Access
+## Architecture
 
-Streams are provided via RTSP through the TUTK connection:
-
-- **Main stream**: `rtsp://localhost:8554/{camera_name}`
-- **Sub stream**: `rtsp://localhost:8554/{camera_name}_sub`
-
-Camera names are derived from Wyze nicknames with spaces replaced by underscores.
-
-## TUTK Library
-
-The plugin uses the TUTK (ThroughTek Kalay) library for direct P2P connections to cameras. This enables local streaming without routing through Wyze cloud servers.
-
-The library is automatically downloaded on first run:
-- Linux amd64: `tutk-ioctl-linux-amd64`
-- Linux arm64: `tutk-ioctl-linux-arm64`
-- macOS amd64: `tutk-ioctl-darwin-amd64`
-- macOS arm64: `tutk-ioctl-darwin-arm64`
-
-## Comparison with docker-wyze-bridge
-
-This plugin is inspired by [docker-wyze-bridge](https://github.com/mrlt8/docker-wyze-bridge) but runs as a native SpatialNVR plugin.
-
-| Feature | wyze-plugin | docker-wyze-bridge |
-|---------|-------------|-------------------|
-| Docker required | No | Yes |
-| Resource usage | Lower | Higher |
-| NVR integration | Native | External |
-| Updates | Plugin system | Docker pull |
-| Configuration | SpatialNVR config | Separate env vars |
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      SpatialNVR                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │                    Wyze Plugin (Go)                      │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │ │
+│  │  │  Wyze API    │  │   Bridge     │  │   Camera     │   │ │
+│  │  │  Client      │  │   Manager    │  │   Manager    │   │ │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘   │ │
+│  └────────────────────────┬────────────────────────────────┘ │
+│                           │ spawns                           │
+│  ┌────────────────────────▼────────────────────────────────┐ │
+│  │              wyze-bridge (Python subprocess)             │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │ │
+│  │  │  TUTK/P2P    │  │   MediaMTX   │  │   Web UI     │   │ │
+│  │  │  Connector   │  │   (RTSP)     │  │   (API)      │   │ │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘   │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           │ RTSP streams
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      go2rtc / Web UI                         │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Troubleshooting
+
+### Bridge Not Starting
+
+1. Verify Python 3.8+ is installed: `python3 --version`
+2. Install requirements: `pip3 install flask paho-mqtt pydantic python-dotenv requests PyYAML xxtea`
+3. Check plugin logs for Python errors
 
 ### Authentication Failed
 
@@ -226,9 +246,10 @@ This plugin is inspired by [docker-wyze-bridge](https://github.com/mrlt8/docker-
 
 ### Stream Not Playing
 
-1. Wait for TUTK connection to establish (can take 10-30 seconds)
-2. Check if camera supports the requested stream quality
+1. Wait for bridge to initialize (can take 30-60 seconds on first connect)
+2. Check bridge is running in health status
 3. Verify RTSP port (8554) is not blocked
+4. Check wyze-bridge web UI at http://localhost:5000
 
 ### High Latency
 
@@ -247,31 +268,19 @@ go test -v ./...
 ### Building for Different Platforms
 
 ```bash
-# Linux AMD64
-GOOS=linux GOARCH=amd64 go build -o wyze-plugin-linux-amd64 .
-
-# Linux ARM64 (Raspberry Pi 4)
-GOOS=linux GOARCH=arm64 go build -o wyze-plugin-linux-arm64 .
-
-# macOS
-GOOS=darwin GOARCH=arm64 go build -o wyze-plugin-darwin-arm64 .
+./build.sh
+# Creates binaries for:
+# - Linux AMD64
+# - Linux ARM64
+# - macOS AMD64
+# - macOS ARM64
 ```
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests
-5. Submit a pull request
-
-See the main [SpatialNVR Contributing Guide](https://github.com/Spatial-NVR/SpatialNVR/blob/main/docs/CONTRIBUTING.md) for style guidelines.
-
 ## Acknowledgments
 
-- [docker-wyze-bridge](https://github.com/mrlt8/docker-wyze-bridge) for TUTK integration inspiration
-- [wyze-sdk](https://github.com/shauntarves/wyze-sdk) for API documentation
+- [docker-wyze-bridge](https://github.com/mrlt8/docker-wyze-bridge) - The Python bridge bundled with this plugin
+- [wyze-sdk](https://github.com/shauntarves/wyze-sdk) - API documentation reference

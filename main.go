@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -70,12 +71,14 @@ type JSONRPCError struct {
 
 // Plugin types
 type Plugin struct {
-	cameras map[string]*WyzeCamera
-	config  PluginConfig
-	api     *WyzeAPI
-	mu      sync.RWMutex
-	ctx     context.Context
-	cancel  context.CancelFunc
+	cameras    map[string]*WyzeCamera
+	config     PluginConfig
+	api        *WyzeAPI
+	bridge     *BridgeManager
+	pluginPath string
+	mu         sync.RWMutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 type PluginConfig struct {
@@ -85,6 +88,11 @@ type PluginConfig struct {
 	APIKey   string         `json:"api_key,omitempty"`
 	TOTPKey  string         `json:"totp_key,omitempty"`
 	Cameras  []CameraFilter `json:"cameras,omitempty"`
+
+	// Bridge configuration
+	RTSPPort int    `json:"rtsp_port,omitempty"` // Default: 8554
+	WebPort  int    `json:"web_port,omitempty"`  // Default: 5000
+	DataPath string `json:"data_path,omitempty"` // Persistent storage path
 }
 
 type CameraFilter struct {
@@ -140,8 +148,13 @@ type PTZCommand struct {
 }
 
 func NewPlugin() *Plugin {
+	// Get the plugin path from executable location
+	exePath, _ := os.Executable()
+	pluginPath := filepath.Dir(exePath)
+
 	return &Plugin{
-		cameras: make(map[string]*WyzeCamera),
+		cameras:    make(map[string]*WyzeCamera),
+		pluginPath: pluginPath,
 	}
 }
 
@@ -273,6 +286,25 @@ func (p *Plugin) Initialize(ctx context.Context, config map[string]interface{}) 
 		return fmt.Errorf("failed to login to Wyze: %w", err)
 	}
 
+	// Start the wyze-bridge subprocess
+	bridgeConfig := BridgeConfig{
+		Email:    p.config.Email,
+		Password: p.config.Password,
+		KeyID:    p.config.KeyID,
+		APIKey:   p.config.APIKey,
+		TOTPKey:  p.config.TOTPKey,
+		RTSPPort: p.config.RTSPPort,
+		WebPort:  p.config.WebPort,
+		DataPath: p.config.DataPath,
+	}
+
+	p.bridge = NewBridgeManager(p.pluginPath, bridgeConfig)
+	if err := p.bridge.Start(p.ctx, bridgeConfig); err != nil {
+		log.Printf("Warning: failed to start wyze-bridge: %v", err)
+		log.Printf("Cameras will not have RTSP streams available")
+		// Don't fail initialization - we can still list cameras
+	}
+
 	// Discover cameras
 	devices, err := p.api.GetDevices(ctx)
 	if err != nil {
@@ -302,7 +334,7 @@ func (p *Plugin) Initialize(ctx context.Context, config map[string]interface{}) 
 			}
 		}
 
-		cam := NewWyzeCamera(device, p.api)
+		cam := NewWyzeCamera(device, p.api, p.bridge)
 		p.mu.Lock()
 		p.cameras[device.MAC] = cam
 		p.mu.Unlock()
@@ -371,6 +403,13 @@ func (p *Plugin) Shutdown(ctx context.Context) error {
 	}
 	p.mu.Unlock()
 
+	// Stop the wyze-bridge subprocess
+	if p.bridge != nil {
+		if err := p.bridge.Stop(); err != nil {
+			log.Printf("Warning: failed to stop wyze-bridge: %v", err)
+		}
+	}
+
 	log.Println("Plugin shutdown complete")
 	return nil
 }
@@ -388,12 +427,17 @@ func (p *Plugin) Health() HealthStatus {
 		}
 	}
 
+	bridgeRunning := p.bridge != nil && p.bridge.IsRunning()
+
 	state := "healthy"
 	msg := fmt.Sprintf("%d/%d cameras online", online, total)
 
 	if total == 0 {
 		state = "unknown"
 		msg = "No cameras configured"
+	} else if !bridgeRunning {
+		state = "unhealthy"
+		msg = "Wyze-bridge not running"
 	} else if online == 0 {
 		state = "unhealthy"
 	} else if online < total {
@@ -405,9 +449,10 @@ func (p *Plugin) Health() HealthStatus {
 		Message:   msg,
 		LastCheck: time.Now().Format(time.RFC3339),
 		Details: map[string]interface{}{
-			"cameras_online": online,
-			"cameras_total":  total,
-			"authenticated":  p.api != nil && p.api.IsAuthenticated(),
+			"cameras_online":  online,
+			"cameras_total":   total,
+			"authenticated":   p.api != nil && p.api.IsAuthenticated(),
+			"bridge_running":  bridgeRunning,
 		},
 	}
 }
@@ -469,7 +514,7 @@ func (p *Plugin) AddCamera(ctx context.Context, cfg CameraConfig) (*PluginCamera
 		device.Nickname = cfg.Name
 	}
 
-	cam := NewWyzeCamera(*device, p.api)
+	cam := NewWyzeCamera(*device, p.api, p.bridge)
 
 	p.mu.Lock()
 	p.cameras[device.MAC] = cam

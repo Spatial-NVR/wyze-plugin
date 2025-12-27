@@ -1,9 +1,9 @@
 id: wyze
 name: Wyze
-version: 1.0.0
-description: Wyze camera integration using TUTK library
-author: NVR System
-homepage: https://github.com/nvr-plugins/wyze
+version: 1.1.0
+description: Wyze camera integration with bundled wyze-bridge for RTSP streaming
+author: SpatialNVR
+homepage: https://github.com/Spatial-NVR/wyze-plugin
 license: MIT
 
 runtime:
@@ -16,38 +16,58 @@ capabilities:
   - two_way_audio
   - motion
   - snapshot
+  - ptz
 
 dependencies:
-  - name: tutk
-    type: library
-    url: https://github.com/mrlt8/docker-wyze-bridge/releases/download/tutk/tutk-ioctl-{os}-{arch}.tar.gz
-    platforms:
-      - linux_amd64
-      - linux_arm64
-      - darwin_amd64
-      - darwin_arm64
+  - name: python3
+    type: runtime
+    version: ">=3.8"
+    description: Required for wyze-bridge subprocess
+  - name: wyze-bridge
+    type: bundled
+    path: wyze-bridge
+    description: Bundled docker-wyze-bridge for TUTK to RTSP conversion
 
 config_schema:
   type: object
   properties:
     email:
       type: string
-      description: Wyze account email
+      title: Wyze Email
+      description: Wyze account email address
     password:
       type: string
+      title: Wyze Password
       description: Wyze account password
+      format: password
     key_id:
       type: string
-      description: Wyze API key ID (optional)
+      title: API Key ID
+      description: Wyze Developer API key ID (optional, improves reliability)
     api_key:
       type: string
-      description: Wyze API key (optional)
+      title: API Key
+      description: Wyze Developer API key (optional)
+      format: password
     totp_key:
       type: string
-      description: TOTP secret for 2FA (optional)
+      title: TOTP Secret
+      description: Base32 TOTP secret for 2FA (optional, required if 2FA is enabled)
+      format: password
+    rtsp_port:
+      type: integer
+      title: RTSP Port
+      description: Port for RTSP streams (default 8554)
+      default: 8554
+    web_port:
+      type: integer
+      title: Web UI Port
+      description: Port for wyze-bridge web interface (default 5000)
+      default: 5000
     cameras:
       type: array
-      description: Specific cameras to enable (empty for all)
+      title: Camera Filter
+      description: Specific cameras to enable (leave empty for all cameras)
       items:
         type: object
         properties:
@@ -56,7 +76,7 @@ config_schema:
             description: Camera MAC address
           name:
             type: string
-            description: Custom name
+            description: Custom display name
   required:
     - email
     - password

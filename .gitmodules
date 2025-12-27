@@ -1,0 +1,3 @@
+[submodule "wyze-bridge"]
+	path = wyze-bridge
+	url = https://github.com/mrlt8/docker-wyze-bridge.git

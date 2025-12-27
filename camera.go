@@ -13,6 +13,7 @@ import (
 type WyzeCamera struct {
 	device WyzeDevice
 	api    *WyzeAPI
+	bridge *BridgeManager
 
 	// TUTK connection state
 	connected bool
@@ -27,10 +28,11 @@ type WyzeCamera struct {
 	mu sync.RWMutex
 }
 
-func NewWyzeCamera(device WyzeDevice, api *WyzeAPI) *WyzeCamera {
+func NewWyzeCamera(device WyzeDevice, api *WyzeAPI, bridge *BridgeManager) *WyzeCamera {
 	return &WyzeCamera{
 		device:   device,
 		api:      api,
+		bridge:   bridge,
 		online:   device.IsOnline,
 		lastSeen: time.Now(),
 	}
@@ -56,10 +58,17 @@ func (c *WyzeCamera) ToPluginCamera() PluginCamera {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Generate stream URLs
-	// When using TUTK, streams are typically accessed via a local bridge
-	mainStream := c.getStreamURL("main")
-	subStream := c.getStreamURL("sub")
+	// Generate stream URLs from the bridge
+	var mainStream, subStream, snapshotURL string
+	if c.bridge != nil {
+		mainStream = c.bridge.GetRTSPURL(c.device.Nickname, false)
+		subStream = c.bridge.GetRTSPURL(c.device.Nickname, true)
+		snapshotURL = c.bridge.GetSnapshotURL(c.device.Nickname)
+	} else {
+		// Fallback to default URLs
+		mainStream = c.getStreamURL("main")
+		subStream = c.getStreamURL("sub")
+	}
 
 	return PluginCamera{
 		ID:           c.device.MAC,
@@ -68,7 +77,7 @@ func (c *WyzeCamera) ToPluginCamera() PluginCamera {
 		Model:        c.device.ProductModel,
 		MainStream:   mainStream,
 		SubStream:    subStream,
-		SnapshotURL:  "", // Wyze doesn't have direct snapshot URLs
+		SnapshotURL:  snapshotURL,
 		Capabilities: c.device.GetCapabilities(),
 		Online:       c.online,
 		LastSeen:     c.lastSeen.Format(time.RFC3339),
@@ -80,7 +89,7 @@ func (c *WyzeCamera) getStreamURL(quality string) string {
 	// The stream URL format depends on how docker-wyze-bridge exposes it
 	// Typically: rtsp://localhost:8554/{camera_name}
 
-	// For now, return a placeholder that would work with wyze-bridge
+	// Fallback URLs when bridge is not available
 	name := sanitizeName(c.device.Nickname)
 	if quality == "sub" {
 		return fmt.Sprintf("rtsp://localhost:8554/%s_sub", name)
@@ -162,12 +171,14 @@ func (c *WyzeCamera) PTZControl(ctx context.Context, cmd PTZCommand) error {
 }
 
 func (c *WyzeCamera) GetSnapshot(ctx context.Context) (string, error) {
-	// Wyze cameras don't have a direct snapshot API
-	// Snapshots need to be captured from the video stream
-	// or retrieved from Wyze cloud if available
+	// Get snapshot from wyze-bridge if available
+	if c.bridge != nil {
+		snapshotURL := c.bridge.GetSnapshotURL(c.device.Nickname)
+		return snapshotURL, nil
+	}
 
-	// For now, return empty - the NVR should capture from stream
-	return "", fmt.Errorf("snapshot not available - capture from stream")
+	// Fallback: Wyze cameras don't have a direct snapshot API
+	return "", fmt.Errorf("snapshot not available - wyze-bridge not running")
 }
 
 // GetTUTKConfig returns the configuration needed for TUTK connection
