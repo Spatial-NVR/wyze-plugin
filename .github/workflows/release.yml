@@ -143,8 +143,6 @@ jobs:
           name: "Wyze Plugin ${{ steps.version.outputs.VERSION }}"
           tag_name: ${{ steps.version.outputs.VERSION }}
           body_path: CHANGELOG.md
-          files: |
-            release/*.tar.gz
-            release/wyze-plugin-*
+          files: release/*
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, 'alpha') || contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'rc') }}
