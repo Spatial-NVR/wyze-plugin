@@ -1,3 +1,3 @@
 module github.com/Spatial-NVR/wyze-plugin
 
-go 1.24
+go 1.22

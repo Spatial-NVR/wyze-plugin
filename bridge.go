@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -90,6 +93,16 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
+	// Ensure MediaMTX is available
+	if err := m.ensureMediaMTX(ctx); err != nil {
+		return fmt.Errorf("failed to setup MediaMTX: %w", err)
+	}
+
+	// Setup TUTK library
+	if err := m.setupTUTKLibrary(); err != nil {
+		log.Printf("Warning: failed to setup TUTK library: %v", err)
+	}
+
 	// Check if Python is available
 	pythonPath, err := exec.LookPath("python3")
 	if err != nil {
@@ -105,12 +118,28 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 	}
 
 	// Build environment variables for wyze-bridge
+	// Set paths first - wyze-bridge expects these at import time
+	tokenPath := filepath.Join(m.dataPath, "tokens")
+	imgPath := filepath.Join(m.dataPath, "img")
+	if err := os.MkdirAll(tokenPath, 0755); err != nil {
+		return fmt.Errorf("failed to create token directory: %w", err)
+	}
+	if err := os.MkdirAll(imgPath, 0755); err != nil {
+		return fmt.Errorf("failed to create img directory: %w", err)
+	}
+
+	// MediaMTX config path
+	mtxConfigPath := filepath.Join(m.bridgePath, "mediamtx.yml")
+
 	env := os.Environ()
 	env = append(env,
 		fmt.Sprintf("WYZE_EMAIL=%s", config.Email),
 		fmt.Sprintf("WYZE_PASSWORD=%s", config.Password),
 		fmt.Sprintf("RTSP_PORT=%d", m.rtspPort),
 		fmt.Sprintf("WEB_PORT=%d", m.webPort),
+		fmt.Sprintf("TOKEN_PATH=%s/", tokenPath),
+		fmt.Sprintf("IMG_PATH=%s/", imgPath),
+		fmt.Sprintf("MTX_CONFIG=%s", mtxConfigPath),
 		"ENABLE_AUDIO=True",
 		"ON_DEMAND=False", // Keep streams active
 		"SNAPSHOT=API",
@@ -310,6 +339,167 @@ func (m *BridgeManager) readOutput(r io.Reader, name string) {
 		default:
 		}
 	}
+}
+
+// ensureMediaMTX downloads and sets up MediaMTX if not present
+func (m *BridgeManager) ensureMediaMTX(ctx context.Context) error {
+	mtxPath := filepath.Join(m.bridgePath, "mediamtx")
+	mtxConfigPath := filepath.Join(m.bridgePath, "mediamtx.yml")
+
+	// Check if MediaMTX binary exists
+	if _, err := os.Stat(mtxPath); err == nil {
+		// Check if config exists
+		if _, err := os.Stat(mtxConfigPath); err == nil {
+			return nil // Already set up
+		}
+	}
+
+	log.Println("Setting up MediaMTX...")
+
+	// Determine architecture
+	arch := runtime.GOARCH
+	goos := runtime.GOOS
+
+	var mtxArch string
+	switch arch {
+	case "amd64":
+		mtxArch = "amd64"
+	case "arm64":
+		mtxArch = "arm64v8"
+	case "arm":
+		mtxArch = "armv7"
+	default:
+		return fmt.Errorf("unsupported architecture: %s", arch)
+	}
+
+	var mtxOS string
+	switch goos {
+	case "linux":
+		mtxOS = "linux"
+	case "darwin":
+		mtxOS = "darwin"
+	case "windows":
+		mtxOS = "windows"
+	default:
+		return fmt.Errorf("unsupported OS: %s", goos)
+	}
+
+	// Download MediaMTX
+	mtxVersion := "1.9.1" // From wyze-bridge .env
+	url := fmt.Sprintf("https://github.com/bluenviron/mediamtx/releases/download/v%s/mediamtx_v%s_%s_%s.tar.gz",
+		mtxVersion, mtxVersion, mtxOS, mtxArch)
+
+	log.Printf("Downloading MediaMTX from %s", url)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download MediaMTX: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("failed to download MediaMTX: HTTP %d", resp.StatusCode)
+	}
+
+	// Extract tarball
+	gzr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read gzip: %w", err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar: %w", err)
+		}
+
+		target := filepath.Join(m.bridgePath, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeReg:
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return err
+			}
+			f.Close()
+		}
+	}
+
+	log.Println("MediaMTX setup complete")
+	return nil
+}
+
+// setupTUTKLibrary sets up the TUTK native library
+func (m *BridgeManager) setupTUTKLibrary() error {
+	// Determine the correct library file
+	arch := runtime.GOARCH
+	var libName string
+	switch arch {
+	case "amd64":
+		libName = "lib.amd64"
+	case "arm64":
+		libName = "lib.arm64"
+	case "arm":
+		libName = "lib.arm"
+	default:
+		return fmt.Errorf("unsupported architecture for TUTK: %s", arch)
+	}
+
+	srcPath := filepath.Join(m.bridgePath, "lib", libName)
+	dstPath := filepath.Join(m.bridgePath, "libIOTCAPIs_ALL.so")
+
+	// Check if source exists
+	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+		return fmt.Errorf("TUTK library not found: %s", srcPath)
+	}
+
+	// Check if destination already exists
+	if _, err := os.Stat(dstPath); err == nil {
+		return nil // Already set up
+	}
+
+	// Create symlink or copy
+	if err := os.Symlink(srcPath, dstPath); err != nil {
+		// Fall back to copy if symlink fails
+		src, err := os.Open(srcPath)
+		if err != nil {
+			return err
+		}
+		defer src.Close()
+
+		dst, err := os.Create(dstPath)
+		if err != nil {
+			return err
+		}
+		defer dst.Close()
+
+		if _, err := io.Copy(dst, src); err != nil {
+			return err
+		}
+
+		// Make executable
+		if err := os.Chmod(dstPath, 0755); err != nil {
+			return err
+		}
+	}
+
+	log.Println("TUTK library setup complete")
+	return nil
 }
 
 // GetCameras returns the list of cameras from the bridge API
