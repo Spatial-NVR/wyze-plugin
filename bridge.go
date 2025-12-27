@@ -365,7 +365,7 @@ func (m *BridgeManager) ensureMediaMTX(ctx context.Context) error {
 	case "amd64":
 		mtxArch = "amd64"
 	case "arm64":
-		mtxArch = "arm64v8"
+		mtxArch = "arm64"
 	case "arm":
 		mtxArch = "armv7"
 	default:
