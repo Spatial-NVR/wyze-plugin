@@ -286,7 +286,8 @@ func (p *Plugin) Initialize(ctx context.Context, config map[string]interface{}) 
 		return fmt.Errorf("failed to login to Wyze: %w", err)
 	}
 
-	// Start the wyze-bridge subprocess
+	// Start the wyze-bridge subprocess asynchronously
+	// This prevents blocking the main request loop during initialization
 	bridgeConfig := BridgeConfig{
 		Email:    p.config.Email,
 		Password: p.config.Password,
@@ -299,11 +300,15 @@ func (p *Plugin) Initialize(ctx context.Context, config map[string]interface{}) 
 	}
 
 	p.bridge = NewBridgeManager(p.pluginPath, bridgeConfig)
-	if err := p.bridge.Start(p.ctx, bridgeConfig); err != nil {
-		log.Printf("Warning: failed to start wyze-bridge: %v", err)
-		log.Printf("Cameras will not have RTSP streams available")
-		// Don't fail initialization - we can still list cameras
-	}
+	go func() {
+		if err := p.bridge.Start(p.ctx, bridgeConfig); err != nil {
+			log.Printf("Warning: failed to start wyze-bridge: %v", err)
+			log.Printf("Cameras will not have RTSP streams available")
+			// Don't fail - we can still list cameras via API
+		} else {
+			log.Printf("Wyze-bridge started successfully")
+		}
+	}()
 
 	// Discover cameras
 	devices, err := p.api.GetDevices(ctx)

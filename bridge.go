@@ -248,7 +248,7 @@ func (m *BridgeManager) waitForReady(ctx context.Context) error {
 		case <-ticker.C:
 			resp, err := http.Get(url)
 			if err == nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				if resp.StatusCode == 200 || resp.StatusCode == 401 {
 					// Bridge is ready (401 means auth required but server is up)
 					return nil
@@ -406,7 +406,7 @@ func (m *BridgeManager) ensureMediaMTX(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to download MediaMTX: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("failed to download MediaMTX: HTTP %d", resp.StatusCode)
@@ -417,7 +417,7 @@ func (m *BridgeManager) ensureMediaMTX(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to read gzip: %w", err)
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 
 	tr := tar.NewReader(gzr)
 	for {
@@ -438,10 +438,10 @@ func (m *BridgeManager) ensureMediaMTX(ctx context.Context) error {
 				return err
 			}
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				_ = f.Close()
 				return err
 			}
-			f.Close()
+			_ = f.Close()
 		}
 	}
 
@@ -485,13 +485,13 @@ func (m *BridgeManager) setupTUTKLibrary() error {
 		if err != nil {
 			return err
 		}
-		defer src.Close()
+		defer func() { _ = src.Close() }()
 
 		dst, err := os.Create(dstPath)
 		if err != nil {
 			return err
 		}
-		defer dst.Close()
+		defer func() { _ = dst.Close() }()
 
 		if _, err := io.Copy(dst, src); err != nil {
 			return err
@@ -521,7 +521,7 @@ func (m *BridgeManager) GetCameras(ctx context.Context) ([]BridgeCamera, error) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cameras from bridge: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("bridge API returned status %d", resp.StatusCode)
