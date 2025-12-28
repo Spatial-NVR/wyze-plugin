@@ -153,8 +153,14 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 	env = append(env,
 		fmt.Sprintf("WYZE_EMAIL=%s", config.Email),
 		fmt.Sprintf("WYZE_PASSWORD=%s", config.Password),
-		fmt.Sprintf("RTSP_PORT=%d", m.rtspPort),
-		fmt.Sprintf("WEB_PORT=%d", m.webPort),
+		// Use WB_ prefix (not deprecated WEB_) for wyze-bridge v2.10+
+		fmt.Sprintf("WB_RTSP_PORT=%d", m.rtspPort),
+		fmt.Sprintf("WB_PORT=%d", m.webPort),
+		// Set MediaMTX ports directly to avoid conflicts with go2rtc (8554/8555)
+		fmt.Sprintf("MTX_RTSPADDRESS=:%d", m.rtspPort),
+		"MTX_WEBRTCADDRESS=:8557",  // go2rtc uses 8555
+		"MTX_HLSADDRESS=:8558",     // Avoid any HLS conflicts
+		"MTX_RTMPADDRESS=",         // Disable RTMP (not needed)
 		fmt.Sprintf("TOKEN_PATH=%s/", tokenPath),
 		fmt.Sprintf("IMG_PATH=%s/", imgPath),
 		fmt.Sprintf("MTX_CONFIG=%s", mtxConfigPath),
