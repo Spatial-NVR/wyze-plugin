@@ -57,8 +57,8 @@ config_schema:
     rtsp_port:
       type: integer
       title: RTSP Port
-      description: Port for RTSP streams (default 8554)
-      default: 8554
+      description: Port for RTSP streams (default 8556, avoids go2rtc conflict)
+      default: 8556
     web_port:
       type: integer
       title: Web UI Port

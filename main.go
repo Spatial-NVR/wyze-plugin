@@ -90,7 +90,7 @@ type PluginConfig struct {
 	Cameras  []CameraFilter `json:"cameras,omitempty"`
 
 	// Bridge configuration
-	RTSPPort int    `json:"rtsp_port,omitempty"` // Default: 8554
+	RTSPPort int    `json:"rtsp_port,omitempty"` // Default: 8556 (avoids go2rtc conflict)
 	WebPort  int    `json:"web_port,omitempty"`  // Default: 5000
 	DataPath string `json:"data_path,omitempty"` // Persistent storage path
 }

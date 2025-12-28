@@ -46,7 +46,7 @@ type BridgeConfig struct {
 	Cameras []string
 
 	// Ports
-	RTSPPort int // Default: 8554
+	RTSPPort int // Default: 8556 (avoids conflict with go2rtc on 8554)
 	WebPort  int // Default: 5000
 
 	// Data path for persistent storage
@@ -55,9 +55,12 @@ type BridgeConfig struct {
 
 // NewBridgeManager creates a new bridge manager
 func NewBridgeManager(pluginPath string, config BridgeConfig) *BridgeManager {
+	// Use different RTSP port than go2rtc to avoid conflicts
+	// go2rtc uses: 8554 (RTSP), 8555 (WebRTC)
+	// So we default to 8556 for wyze-bridge
 	rtspPort := config.RTSPPort
 	if rtspPort == 0 {
-		rtspPort = 8554
+		rtspPort = 8556
 	}
 
 	webPort := config.WebPort

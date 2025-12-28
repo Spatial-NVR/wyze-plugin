@@ -83,14 +83,14 @@ func (c *WyzeCamera) ToPluginCamera() PluginCamera {
 func (c *WyzeCamera) getStreamURL(quality string) string {
 	// TUTK-based streaming requires a local bridge
 	// The stream URL format depends on how docker-wyze-bridge exposes it
-	// Typically: rtsp://localhost:8554/{camera_name}
+	// Default port 8556 to avoid conflict with go2rtc on 8554
 
 	// Fallback URLs when bridge is not available
 	name := sanitizeName(c.device.Nickname)
 	if quality == "sub" {
-		return fmt.Sprintf("rtsp://localhost:8554/%s_sub", name)
+		return fmt.Sprintf("rtsp://localhost:8556/%s_sub", name)
 	}
-	return fmt.Sprintf("rtsp://localhost:8554/%s", name)
+	return fmt.Sprintf("rtsp://localhost:8556/%s", name)
 }
 
 func (c *WyzeCamera) Connect(ctx context.Context) error {
