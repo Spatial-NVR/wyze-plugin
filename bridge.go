@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,9 +14,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
+
+// NewJSONDecoder creates a new JSON decoder
+func NewJSONDecoder(r io.Reader) *json.Decoder {
+	return json.NewDecoder(r)
+}
 
 const (
 	// DefaultRTSPPort is the default RTSP port for wyze-bridge
@@ -328,7 +335,8 @@ func (m *BridgeManager) IsRunning() bool {
 
 // GetRTSPURL returns the RTSP URL for a camera
 func (m *BridgeManager) GetRTSPURL(cameraName string, substream bool) string {
-	name := sanitizeName(cameraName)
+	// wyze-bridge uses lowercase names with hyphens
+	name := bridgeSanitizeName(cameraName)
 	if substream {
 		return fmt.Sprintf("rtsp://localhost:%d/%s_sub", m.rtspPort, name)
 	}
@@ -337,8 +345,29 @@ func (m *BridgeManager) GetRTSPURL(cameraName string, substream bool) string {
 
 // GetSnapshotURL returns the snapshot URL for a camera
 func (m *BridgeManager) GetSnapshotURL(cameraName string) string {
-	name := sanitizeName(cameraName)
+	name := bridgeSanitizeName(cameraName)
 	return fmt.Sprintf("http://localhost:%d/img/%s.jpg", m.webPort, name)
+}
+
+// bridgeSanitizeName converts a camera name to the format wyze-bridge uses
+// e.g., "Pet Cam" -> "pet-cam"
+func bridgeSanitizeName(name string) string {
+	name = strings.ToLower(name)
+	result := ""
+	for _, c := range name {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			result += string(c)
+		} else if c == ' ' || c == '_' {
+			result += "-"
+		} else if c == '-' {
+			result += "-"
+		}
+	}
+	// Remove consecutive hyphens
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
+	}
+	return strings.Trim(result, "-")
 }
 
 // readOutput reads and logs output from the bridge process
@@ -527,7 +556,7 @@ func (m *BridgeManager) setupTUTKLibrary() error {
 }
 
 // GetCameras returns the list of cameras from the bridge API
-func (m *BridgeManager) GetCameras(ctx context.Context) ([]BridgeCamera, error) {
+func (m *BridgeManager) GetCameras(ctx context.Context) (map[string]BridgeCamera, error) {
 	url := fmt.Sprintf("http://localhost:%d/api/cameras", m.webPort)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -546,16 +575,78 @@ func (m *BridgeManager) GetCameras(ctx context.Context) ([]BridgeCamera, error) 
 		return nil, fmt.Errorf("bridge API returned status %d", resp.StatusCode)
 	}
 
-	// Parse response - bridge returns camera list
-	// For now, return empty - we'll use the main Wyze API for camera list
-	return nil, nil
+	// Parse response - bridge returns camera list as JSON object keyed by stream name
+	var result map[string]BridgeCamera
+	decoder := NewJSONDecoder(resp.Body)
+	if err := decoder.Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to parse bridge camera response: %w", err)
+	}
+
+	return result, nil
+}
+
+// IsCameraConnected checks if a specific camera is connected via the bridge
+func (m *BridgeManager) IsCameraConnected(cameraName string) bool {
+	if !m.IsRunning() {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cameras, err := m.GetCameras(ctx)
+	if err != nil {
+		log.Printf("Failed to check camera connection: %v", err)
+		return false
+	}
+
+	// The bridge uses lowercase names with hyphens or underscores
+	// e.g., "Pet Cam" becomes "pet-cam" or "pet_cam"
+	normalizedName := normalizeCameraName(cameraName)
+
+	// Check all cameras for a match
+	for key, cam := range cameras {
+		normalizedKey := normalizeCameraName(key)
+		if normalizedKey == normalizedName {
+			return cam.Connected
+		}
+	}
+
+	return false
+}
+
+// normalizeCameraName normalizes a camera name for comparison
+// Converts to lowercase and replaces spaces/special chars with underscores
+func normalizeCameraName(name string) string {
+	name = strings.ToLower(name)
+	result := ""
+	for _, c := range name {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			result += string(c)
+		} else if c == ' ' || c == '-' || c == '_' {
+			result += "_"
+		}
+	}
+	// Remove consecutive underscores
+	for strings.Contains(result, "__") {
+		result = strings.ReplaceAll(result, "__", "_")
+	}
+	return strings.Trim(result, "_")
 }
 
 // BridgeCamera represents a camera from the bridge API
 type BridgeCamera struct {
-	Name      string `json:"name"`
-	Model     string `json:"model"`
-	Connected bool   `json:"connected"`
+	Name       string `json:"name_uri"`
+	Model      string `json:"product_model"`
+	Connected  bool   `json:"connected"`
+	Enabled    bool   `json:"enabled"`
+	OnDemand   bool   `json:"on_demand"`
+	Audio      bool   `json:"audio"`
+	Recording  bool   `json:"recording"`
+	URI        string `json:"uri"`
+	RTSPURI    string `json:"rtsp_uri"`
+	HLSURI     string `json:"hls_uri"`
+	WebRTCURI  string `json:"webrtc_uri"`
 }
 
 // ensureWyzeBridge downloads the wyze-bridge Python app if not present

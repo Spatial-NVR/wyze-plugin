@@ -41,6 +41,13 @@ func (c *WyzeCamera) Model() string   { return c.device.ProductModel }
 func (c *WyzeCamera) IsOnline() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
+	// Check if bridge reports camera as connected
+	if c.bridge != nil && c.bridge.IsCameraConnected(c.device.Nickname) {
+		return true
+	}
+
+	// Fall back to stored online status
 	return c.online
 }
 
@@ -51,9 +58,6 @@ func (c *WyzeCamera) LastSeen() time.Time {
 }
 
 func (c *WyzeCamera) ToPluginCamera() PluginCamera {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	// Generate stream URLs from the bridge
 	var mainStream, subStream, snapshotURL string
 	if c.bridge != nil {
@@ -66,6 +70,21 @@ func (c *WyzeCamera) ToPluginCamera() PluginCamera {
 		subStream = c.getStreamURL("sub")
 	}
 
+	// Check online status (this queries the bridge if available)
+	online := c.IsOnline()
+
+	c.mu.RLock()
+	lastSeen := c.lastSeen
+	c.mu.RUnlock()
+
+	// Update lastSeen if online
+	if online {
+		lastSeen = time.Now()
+		c.mu.Lock()
+		c.lastSeen = lastSeen
+		c.mu.Unlock()
+	}
+
 	return PluginCamera{
 		ID:           c.device.MAC,
 		PluginID:     "wyze",
@@ -75,8 +94,8 @@ func (c *WyzeCamera) ToPluginCamera() PluginCamera {
 		SubStream:    subStream,
 		SnapshotURL:  snapshotURL,
 		Capabilities: c.device.GetCapabilities(),
-		Online:       c.online,
-		LastSeen:     c.lastSeen.Format(time.RFC3339),
+		Online:       online,
+		LastSeen:     lastSeen.Format(time.RFC3339),
 	}
 }
 
