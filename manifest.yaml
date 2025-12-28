@@ -1,6 +1,6 @@
 id: wyze
 name: Wyze
-version: 1.2.1
+version: 1.2.2
 description: Wyze camera integration with bundled wyze-bridge for RTSP streaming
 author: SpatialNVR
 homepage: https://github.com/Spatial-NVR/wyze-plugin
@@ -57,13 +57,13 @@ config_schema:
     rtsp_port:
       type: integer
       title: RTSP Port
-      description: Port for RTSP streams (default 8556, avoids go2rtc conflict)
-      default: 8556
+      description: Port for RTSP streams (default 8560, avoids go2rtc conflict)
+      default: 8560
     web_port:
       type: integer
       title: Web UI Port
-      description: Port for wyze-bridge web interface (default 5000)
-      default: 5000
+      description: Port for wyze-bridge web interface (default 5001)
+      default: 5001
     cameras:
       type: array
       title: Camera Filter
