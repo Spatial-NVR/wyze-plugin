@@ -12,8 +12,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
+)
+
+const (
+	// DefaultRTSPPort is the default RTSP port for wyze-bridge
+	// Uses 8556 to avoid conflict with go2rtc (8554/8555)
+	// Can be overridden via WYZE_RTSP_PORT environment variable
+	DefaultRTSPPort = 8556
+
+	// DefaultWebPort is the default web UI port for wyze-bridge
+	// Can be overridden via WYZE_WEB_PORT environment variable
+	DefaultWebPort = 5000
 )
 
 // BridgeManager manages the wyze-bridge subprocess
@@ -55,17 +67,15 @@ type BridgeConfig struct {
 
 // NewBridgeManager creates a new bridge manager
 func NewBridgeManager(pluginPath string, config BridgeConfig) *BridgeManager {
-	// Use different RTSP port than go2rtc to avoid conflicts
-	// go2rtc uses: 8554 (RTSP), 8555 (WebRTC)
-	// So we default to 8556 for wyze-bridge
+	// Priority: config > env var > default
 	rtspPort := config.RTSPPort
 	if rtspPort == 0 {
-		rtspPort = 8556
+		rtspPort = getEnvInt("WYZE_RTSP_PORT", DefaultRTSPPort)
 	}
 
 	webPort := config.WebPort
 	if webPort == 0 {
-		webPort = 5000
+		webPort = getEnvInt("WYZE_WEB_PORT", DefaultWebPort)
 	}
 
 	dataPath := config.DataPath
@@ -599,4 +609,14 @@ func (m *BridgeManager) ensureWyzeBridge(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// getEnvInt returns an environment variable as int, or the default if not set/invalid
+func getEnvInt(key string, defaultVal int) int {
+	if val := os.Getenv(key); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			return i
+		}
+	}
+	return defaultVal
 }
