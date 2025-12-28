@@ -26,13 +26,14 @@ func NewJSONDecoder(r io.Reader) *json.Decoder {
 
 const (
 	// DefaultRTSPPort is the default RTSP port for wyze-bridge
-	// Uses 8556 to avoid conflict with go2rtc (8554/8555)
+	// Uses 8560 to avoid conflict with go2rtc (8554/8555) and other services
 	// Can be overridden via WYZE_RTSP_PORT environment variable
-	DefaultRTSPPort = 8556
+	DefaultRTSPPort = 8560
 
 	// DefaultWebPort is the default web UI port for wyze-bridge
+	// Uses 5001 to avoid conflicts with other services using 5000
 	// Can be overridden via WYZE_WEB_PORT environment variable
-	DefaultWebPort = 5000
+	DefaultWebPort = 5001
 )
 
 // BridgeManager manages the wyze-bridge subprocess
@@ -170,8 +171,8 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		fmt.Sprintf("WB_PORT=%d", m.webPort),
 		// Set MediaMTX ports directly to avoid conflicts with go2rtc (8554/8555)
 		fmt.Sprintf("MTX_RTSPADDRESS=:%d", m.rtspPort),
-		"MTX_WEBRTCADDRESS=:8557",  // go2rtc uses 8555
-		"MTX_HLSADDRESS=:8558",     // Avoid any HLS conflicts
+		"MTX_WEBRTCADDRESS=:8561",  // go2rtc uses 8555
+		"MTX_HLSADDRESS=:8562",     // Avoid any HLS conflicts
 		"MTX_RTMPADDRESS=",         // Disable RTMP (not needed)
 		fmt.Sprintf("TOKEN_PATH=%s/", tokenPath),
 		fmt.Sprintf("IMG_PATH=%s/", imgPath),
