@@ -88,6 +88,11 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 	}
 	m.runningMu.Unlock()
 
+	// Ensure wyze-bridge Python app is available
+	if err := m.ensureWyzeBridge(ctx); err != nil {
+		return fmt.Errorf("failed to setup wyze-bridge: %w", err)
+	}
+
 	// Ensure data directory exists
 	if err := os.MkdirAll(m.dataPath, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
@@ -532,4 +537,63 @@ type BridgeCamera struct {
 	Name      string `json:"name"`
 	Model     string `json:"model"`
 	Connected bool   `json:"connected"`
+}
+
+// ensureWyzeBridge downloads the wyze-bridge Python app if not present
+func (m *BridgeManager) ensureWyzeBridge(ctx context.Context) error {
+	bridgeScript := filepath.Join(m.bridgePath, "wyze_bridge.py")
+
+	// Check if wyze-bridge is already installed
+	if _, err := os.Stat(bridgeScript); err == nil {
+		return nil // Already installed
+	}
+
+	log.Println("wyze-bridge not found, downloading...")
+
+	// Get the parent directory of bridgePath (which is pluginPath/wyze-bridge/app)
+	// We want to clone to pluginPath/wyze-bridge
+	wyzeBridgeDir := filepath.Dir(m.bridgePath) // pluginPath/wyze-bridge
+
+	// Check if git is available
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return fmt.Errorf("git not found: please install git or manually clone wyze-bridge to %s", wyzeBridgeDir)
+	}
+
+	// Create parent directory if needed
+	if err := os.MkdirAll(filepath.Dir(wyzeBridgeDir), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// Remove existing incomplete directory if any
+	if _, err := os.Stat(wyzeBridgeDir); err == nil {
+		log.Println("Removing incomplete wyze-bridge directory...")
+		if err := os.RemoveAll(wyzeBridgeDir); err != nil {
+			return fmt.Errorf("failed to remove existing directory: %w", err)
+		}
+	}
+
+	log.Println("Cloning wyze-bridge repository (this may take a moment)...")
+
+	// Clone the wyze-bridge repository
+	// Using shallow clone with depth=1 for faster download
+	cmd := exec.CommandContext(ctx, gitPath, "clone",
+		"--depth", "1",
+		"--single-branch",
+		"https://github.com/mrlt8/docker-wyze-bridge.git",
+		wyzeBridgeDir)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git clone failed: %w\n%s", err, string(output))
+	}
+
+	log.Println("wyze-bridge downloaded successfully")
+
+	// Verify the main script exists
+	if _, err := os.Stat(bridgeScript); os.IsNotExist(err) {
+		return fmt.Errorf("wyze-bridge downloaded but wyze_bridge.py not found at %s", bridgeScript)
+	}
+
+	return nil
 }
