@@ -51,6 +51,11 @@ type BridgeManager struct {
 	runningMu sync.RWMutex
 
 	stopCh chan struct{}
+
+	// Startup tracking to suppress log spam during bridge initialization
+	startTime        time.Time
+	apiReadyLogged   bool
+	apiFailureLogged bool
 }
 
 // BridgeConfig holds configuration for the wyze-bridge
@@ -215,6 +220,9 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 
 	m.runningMu.Lock()
 	m.running = true
+	m.startTime = time.Now()
+	m.apiReadyLogged = false
+	m.apiFailureLogged = false
 	m.runningMu.Unlock()
 
 	// Start log readers
@@ -263,7 +271,9 @@ func (m *BridgeManager) waitForReady(ctx context.Context) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
-	url := fmt.Sprintf("http://localhost:%d/api/cameras", m.webPort)
+	// Use 127.0.0.1 explicitly to avoid IPv6 issues
+	// Some systems try [::1] first which may not work with wyze-bridge
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/cameras", m.webPort)
 
 	for {
 		select {
@@ -346,7 +356,8 @@ func (m *BridgeManager) GetRTSPURL(cameraName string, substream bool) string {
 // GetSnapshotURL returns the snapshot URL for a camera
 func (m *BridgeManager) GetSnapshotURL(cameraName string) string {
 	name := bridgeSanitizeName(cameraName)
-	return fmt.Sprintf("http://localhost:%d/img/%s.jpg", m.webPort, name)
+	// Use 127.0.0.1 explicitly to avoid IPv6 issues
+	return fmt.Sprintf("http://127.0.0.1:%d/img/%s.jpg", m.webPort, name)
 }
 
 // bridgeSanitizeName converts a camera name to the format wyze-bridge uses
@@ -557,7 +568,8 @@ func (m *BridgeManager) setupTUTKLibrary() error {
 
 // GetCameras returns the list of cameras from the bridge API
 func (m *BridgeManager) GetCameras(ctx context.Context) (map[string]BridgeCamera, error) {
-	url := fmt.Sprintf("http://localhost:%d/api/cameras", m.webPort)
+	// Use 127.0.0.1 explicitly to avoid IPv6 issues
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/cameras", m.webPort)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -588,6 +600,11 @@ func (m *BridgeManager) GetCameras(ctx context.Context) (map[string]BridgeCamera
 // IsCameraConnected checks if a specific camera is connected via the bridge
 func (m *BridgeManager) IsCameraConnected(cameraName string) bool {
 	if !m.IsRunning() {
+		return false
+	}
+
+	// Suppress connection checks during startup grace period (30 seconds)
+	if time.Since(m.startTime) < 30*time.Second {
 		return false
 	}
 
