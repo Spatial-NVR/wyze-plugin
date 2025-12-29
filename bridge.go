@@ -201,8 +201,8 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		}
 	}
 
-	// Start the bridge
-	m.cmd = exec.CommandContext(ctx, pythonPath, "wyze_bridge.py")
+	// Start the bridge with web UI (frontend.py includes both Flask API and WyzeBridge)
+	m.cmd = exec.CommandContext(ctx, pythonPath, "frontend.py")
 	m.cmd.Dir = m.bridgePath
 	m.cmd.Env = env
 
