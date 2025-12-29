@@ -26,14 +26,14 @@ func NewJSONDecoder(r io.Reader) *json.Decoder {
 
 const (
 	// DefaultRTSPPort is the default RTSP port for wyze-bridge
-	// Uses 8560 to avoid conflict with go2rtc (8554/8555) and other services
+	// Uses 8564 to avoid conflict with go2rtc (8554/8555) and previous instances
 	// Can be overridden via WYZE_RTSP_PORT environment variable
-	DefaultRTSPPort = 8560
+	DefaultRTSPPort = 8564
 
 	// DefaultWebPort is the default web UI port for wyze-bridge
-	// Must match frontend.py's default port (5000)
+	// Using 5002 to avoid conflicts with macOS AirPlay (5000) and other services
 	// Can be overridden via WYZE_WEB_PORT environment variable
-	DefaultWebPort = 5000
+	DefaultWebPort = 5002
 )
 
 // BridgeManager manages the wyze-bridge subprocess
@@ -162,7 +162,13 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 	// MediaMTX config path
 	mtxConfigPath := filepath.Join(m.bridgePath, "mediamtx.yml")
 
-	env := os.Environ()
+	// Filter out deprecated WEB_PATH from inherited environment
+	var env []string
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "WEB_PATH=") {
+			env = append(env, e)
+		}
+	}
 	env = append(env,
 		fmt.Sprintf("WYZE_EMAIL=%s", config.Email),
 		fmt.Sprintf("WYZE_PASSWORD=%s", config.Password),
