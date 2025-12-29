@@ -14,63 +14,12 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-            suffix: linux-amd64
-          - goos: linux
-            goarch: arm64
-            suffix: linux-arm64
-          - goos: darwin
-            goarch: amd64
-            suffix: darwin-amd64
-          - goos: darwin
-            goarch: arm64
-            suffix: darwin-arm64
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-
-      - name: Get version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "VERSION_NUM=${VERSION#v}" >> $GITHUB_OUTPUT
-
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
-        run: |
-          go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION_NUM }}" \
-            -o wyze-plugin-${{ matrix.suffix }} .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wyze-plugin-${{ matrix.suffix }}
-          path: wyze-plugin-${{ matrix.suffix }}
-
   release:
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Get version
         id: version
@@ -83,51 +32,49 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "VERSION_NUM=${VERSION#v}" >> $GITHUB_OUTPUT
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-
-      - name: Prepare release assets
+      - name: Download wyzecam library
         run: |
-          mkdir -p release
+          WYZECAM_VERSION="2.10.2"
+          curl -sL "https://github.com/mrlt8/docker-wyze-bridge/archive/refs/tags/v${WYZECAM_VERSION}.tar.gz" | tar -xz
+          cp -r "docker-wyze-bridge-${WYZECAM_VERSION}/app/wyzecam" .
+          rm -rf "docker-wyze-bridge-${WYZECAM_VERSION}"
 
-          # Create archives for each platform
-          for dir in dist/*/; do
-            name=$(basename "$dir")
-            binary=$(ls "$dir")
+      - name: Prepare release package
+        run: |
+          mkdir -p release pkg
 
-            # Copy binary
-            cp "$dir/$binary" "release/$binary"
-            chmod +x "release/$binary"
+          # Update version in manifest
+          sed -i "s/version:.*/version: ${{ steps.version.outputs.VERSION_NUM }}/" manifest.yaml
 
-            # Create tarball with manifest
-            mkdir -p "pkg"
-            cp "$dir/$binary" "pkg/wyze-plugin"
-            cp manifest.yaml "pkg/"
+          # Copy plugin files
+          cp wyze_plugin.py pkg/
+          cp manifest.yaml pkg/
+          cp requirements.txt pkg/
+          cp setup.sh pkg/
+          cp -r wyzecam pkg/
 
-            # Add version to manifest
-            sed -i "s/version:.*/version: ${{ steps.version.outputs.VERSION_NUM }}/" pkg/manifest.yaml
-
-            tar -czf "release/${name}-${{ steps.version.outputs.VERSION }}.tar.gz" -C pkg .
-            rm -rf pkg
-          done
+          # Create tarball
+          tar -czf "release/wyze-plugin-${{ steps.version.outputs.VERSION }}.tar.gz" -C pkg .
 
           ls -la release/
 
       - name: Generate changelog
         run: |
-          echo "## Wyze Plugin ${{ steps.version.outputs.VERSION }}" > CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "### Features" >> CHANGELOG.md
-          echo "- Wyze camera integration with RTSP support" >> CHANGELOG.md
-          echo "- Motion detection events" >> CHANGELOG.md
-          echo "- Cloud event synchronization" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "### Supported Devices" >> CHANGELOG.md
-          echo "- Wyze Cam v2/v3" >> CHANGELOG.md
-          echo "- Wyze Cam Pan" >> CHANGELOG.md
-          echo "- Wyze Cam Outdoor" >> CHANGELOG.md
+          cat > CHANGELOG.md << 'EOF'
+          ## Wyze Plugin ${{ steps.version.outputs.VERSION }}
+
+          ### Changes
+          - Python-based plugin using wyzecam library directly (like Scrypted)
+          - Direct TUTK P2P camera connections
+          - No external dependencies (MediaMTX, wyze-bridge subprocess)
+          - Downloads TUTK library automatically
+
+          ### Supported Devices
+          - Wyze Cam v2/v3
+          - Wyze Cam Pan v1/v2
+          - Wyze Cam Outdoor
+          - Other TUTK-compatible Wyze cameras
+          EOF
 
       - name: Create tag (for workflow_dispatch)
         if: github.event_name == 'workflow_dispatch'
