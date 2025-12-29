@@ -18,16 +18,6 @@ capabilities:
   - snapshot
   - ptz
 
-dependencies:
-  - name: python3
-    type: runtime
-    version: ">=3.8"
-    description: Required for wyze-bridge subprocess
-  - name: wyze-bridge
-    type: bundled
-    path: wyze-bridge
-    description: Bundled docker-wyze-bridge for TUTK to RTSP conversion
-
 config_schema:
   type: object
   properties:
