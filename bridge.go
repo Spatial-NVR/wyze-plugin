@@ -31,9 +31,9 @@ const (
 	DefaultRTSPPort = 8560
 
 	// DefaultWebPort is the default web UI port for wyze-bridge
-	// Uses 5001 to avoid conflicts with other services using 5000
+	// Must match frontend.py's default port (5000)
 	// Can be overridden via WYZE_WEB_PORT environment variable
-	DefaultWebPort = 5001
+	DefaultWebPort = 5000
 )
 
 // BridgeManager manages the wyze-bridge subprocess

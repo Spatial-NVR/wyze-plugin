@@ -52,8 +52,8 @@ config_schema:
     web_port:
       type: integer
       title: Web UI Port
-      description: Port for wyze-bridge web interface (default 5001)
-      default: 5001
+      description: Port for wyze-bridge web interface (default 5000)
+      default: 5000
     cameras:
       type: array
       title: Camera Filter
