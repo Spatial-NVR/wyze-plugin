@@ -182,6 +182,7 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		"ON_DEMAND=False", // Keep streams active
 		"SNAPSHOT=API",
 		"QUALITY=HD",
+		"WB_AUTH=False", // Disable web API auth for internal plugin communication
 	)
 
 	if config.KeyID != "" {
