@@ -24,6 +24,9 @@ const (
 	// DefaultWebPort is the default web UI port for wyze-bridge
 	// Using 5002 to avoid conflicts with macOS AirPlay (5000)
 	DefaultWebPort = 5002
+
+	// WyzeBridgePath is the path to the embedded wyze-bridge Python app
+	WyzeBridgePath = "/app/wyze-bridge"
 )
 
 // BridgeConfig holds configuration for the wyze-bridge
@@ -60,16 +63,14 @@ type BridgeCamera struct {
 	WebRTCURI string `json:"webrtc_uri"`
 }
 
-// BridgeManager manages wyze-bridge as a Docker container
-// This provides better isolation and simpler dependency management
+// BridgeManager manages wyze-bridge as a subprocess
+// Runs the embedded Python wyze-bridge application directly
 type BridgeManager struct {
-	containerName string
-	imageName     string
-	dataPath      string
-
+	dataPath string
 	rtspPort int
 	webPort  int
 
+	cmd       *exec.Cmd
 	running   bool
 	runningMu sync.RWMutex
 
@@ -81,7 +82,7 @@ type BridgeManager struct {
 	apiFailureLogged bool
 }
 
-// NewBridgeManager creates a new Docker-based bridge manager
+// NewBridgeManager creates a new subprocess-based bridge manager
 func NewBridgeManager(pluginPath string, config BridgeConfig) *BridgeManager {
 	// Priority: config > env var > default
 	rtspPort := config.RTSPPort
@@ -100,16 +101,14 @@ func NewBridgeManager(pluginPath string, config BridgeConfig) *BridgeManager {
 	}
 
 	return &BridgeManager{
-		containerName: "spatialnvr-wyze-bridge",
-		imageName:     "mrlt8/wyze-bridge:latest",
-		dataPath:      dataPath,
-		rtspPort:      rtspPort,
-		webPort:       webPort,
-		stopCh:        make(chan struct{}),
+		dataPath: dataPath,
+		rtspPort: rtspPort,
+		webPort:  webPort,
+		stopCh:   make(chan struct{}),
 	}
 }
 
-// Start launches the wyze-bridge container
+// Start launches the wyze-bridge subprocess
 func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 	m.runningMu.Lock()
 	if m.running {
@@ -118,9 +117,14 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 	}
 	m.runningMu.Unlock()
 
-	// Check if Docker is available
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker not found in PATH - please install Docker")
+	// Check if wyze-bridge is available
+	wyzeBridgeScript := filepath.Join(WyzeBridgePath, "wyze-bridge")
+	if _, err := os.Stat(wyzeBridgeScript); os.IsNotExist(err) {
+		// Try alternative location
+		wyzeBridgeScript = filepath.Join(WyzeBridgePath, "run.py")
+		if _, err := os.Stat(wyzeBridgeScript); os.IsNotExist(err) {
+			return fmt.Errorf("wyze-bridge not found at %s - ensure the container includes wyze-bridge", WyzeBridgePath)
+		}
 	}
 
 	// Ensure data directories exist
@@ -133,92 +137,88 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		return fmt.Errorf("failed to create img directory: %w", err)
 	}
 
-	// Stop any existing container with same name
-	log.Println("Stopping any existing wyze-bridge container...")
-	stopCmd := exec.CommandContext(ctx, "docker", "rm", "-f", m.containerName)
-	_ = stopCmd.Run() // Ignore error if container doesn't exist
-
-	// Pull the latest image
-	log.Printf("Pulling wyze-bridge image: %s", m.imageName)
-	pullCmd := exec.CommandContext(ctx, "docker", "pull", m.imageName)
-	pullCmd.Stdout = os.Stdout
-	pullCmd.Stderr = os.Stderr
-	if err := pullCmd.Run(); err != nil {
-		log.Printf("Warning: failed to pull image (will use cached): %v", err)
-	}
-
-	// Build docker run command
-	args := []string{
-		"run",
-		"-d",                          // Detached mode
-		"--name", m.containerName,     // Container name
-		"--restart", "unless-stopped", // Restart policy
-
-		// Port mappings
-		"-p", fmt.Sprintf("%d:8554", m.rtspPort), // RTSP
-		"-p", fmt.Sprintf("%d:5000", m.webPort),  // Web UI
-		"-p", "8561:8561/tcp",                    // WebRTC HTTP
-		"-p", "8563:8563/udp",                    // WebRTC ICE UDP
-		"-p", "8562:8888",                        // HLS
-
-		// Volume mounts for persistence
-		"-v", fmt.Sprintf("%s:/tokens", tokenPath),
-		"-v", fmt.Sprintf("%s:/img", imgPath),
-
-		// Environment variables
-		"-e", fmt.Sprintf("WYZE_EMAIL=%s", config.Email),
-		"-e", fmt.Sprintf("WYZE_PASSWORD=%s", config.Password),
-		"-e", "ENABLE_AUDIO=True",
-		"-e", "ON_DEMAND=False",
-		"-e", "SNAPSHOT=API",
-		"-e", "QUALITY=HD",
-		"-e", "WB_AUTH=False",
-	}
+	// Build environment variables for wyze-bridge
+	env := os.Environ()
+	env = append(env,
+		fmt.Sprintf("WYZE_EMAIL=%s", config.Email),
+		fmt.Sprintf("WYZE_PASSWORD=%s", config.Password),
+		"ENABLE_AUDIO=True",
+		"ON_DEMAND=False",
+		"SNAPSHOT=API",
+		"QUALITY=HD",
+		"WB_AUTH=False",
+		fmt.Sprintf("RTSP_PORT=%d", m.rtspPort),
+		fmt.Sprintf("WEB_PORT=%d", m.webPort),
+		fmt.Sprintf("TOKEN_PATH=%s", tokenPath),
+		fmt.Sprintf("IMG_PATH=%s", imgPath),
+	)
 
 	// Optional credentials
 	if config.KeyID != "" {
-		args = append(args, "-e", fmt.Sprintf("API_ID=%s", config.KeyID))
+		env = append(env, fmt.Sprintf("API_ID=%s", config.KeyID))
 	}
 	if config.APIKey != "" {
-		args = append(args, "-e", fmt.Sprintf("API_KEY=%s", config.APIKey))
+		env = append(env, fmt.Sprintf("API_KEY=%s", config.APIKey))
 	}
 	if config.TOTPKey != "" {
-		args = append(args, "-e", fmt.Sprintf("TOTP_KEY=%s", config.TOTPKey))
+		env = append(env, fmt.Sprintf("TOTP_KEY=%s", config.TOTPKey))
 	}
 
 	// Camera filter
 	if len(config.Cameras) > 0 {
-		for _, cam := range config.Cameras {
-			args = append(args, "-e", fmt.Sprintf("FILTER_NAMES=%s", cam))
-		}
+		env = append(env, fmt.Sprintf("FILTER_NAMES=%s", strings.Join(config.Cameras, ",")))
 	}
 
-	// Add image name at the end
-	args = append(args, m.imageName)
-
-	log.Printf("Starting wyze-bridge container: docker %s", strings.Join(args, " "))
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to start container: %w\n%s", err, string(output))
-	}
-
-	containerID := strings.TrimSpace(string(output))
-	if len(containerID) >= 12 {
-		log.Printf("Container started with ID: %s", containerID[:12])
+	// Determine how to run wyze-bridge
+	var cmd *exec.Cmd
+	if strings.HasSuffix(wyzeBridgeScript, ".py") {
+		cmd = exec.CommandContext(ctx, "python3", wyzeBridgeScript)
 	} else {
-		log.Printf("Container started with ID: %s", containerID)
+		cmd = exec.CommandContext(ctx, wyzeBridgeScript)
+	}
+	cmd.Dir = WyzeBridgePath
+	cmd.Env = env
+
+	// Capture output
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
+	log.Printf("Starting wyze-bridge subprocess from %s", wyzeBridgeScript)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start wyze-bridge: %w", err)
+	}
+
+	m.cmd = cmd
 	m.runningMu.Lock()
 	m.running = true
 	m.startTime = time.Now()
 	m.apiReadyLogged = false
 	m.apiFailureLogged = false
+	m.stopCh = make(chan struct{})
 	m.runningMu.Unlock()
 
-	// Start log streamer in background
-	go m.streamLogs(ctx)
+	// Stream logs in background
+	go m.readOutput(stdout, "stdout")
+	go m.readOutput(stderr, "stderr")
+
+	// Monitor process in background
+	go func() {
+		err := cmd.Wait()
+		m.runningMu.Lock()
+		m.running = false
+		m.runningMu.Unlock()
+		if err != nil {
+			log.Printf("wyze-bridge process exited with error: %v", err)
+		} else {
+			log.Println("wyze-bridge process exited normally")
+		}
+	}()
 
 	// Wait for bridge to be ready
 	if err := m.waitForReady(ctx); err != nil {
@@ -226,32 +226,11 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		return fmt.Errorf("bridge failed to start: %w", err)
 	}
 
-	log.Printf("Wyze-bridge container started successfully on RTSP port %d", m.rtspPort)
+	log.Printf("Wyze-bridge started successfully on RTSP port %d", m.rtspPort)
 	return nil
 }
 
-// streamLogs streams container logs to our log output
-func (m *BridgeManager) streamLogs(ctx context.Context) {
-	cmd := exec.CommandContext(ctx, "docker", "logs", "-f", m.containerName)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("Failed to get container logs: %v", err)
-		return
-	}
-	stderr, _ := cmd.StderrPipe()
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to start log streaming: %v", err)
-		return
-	}
-
-	go m.readOutput(stdout, "stdout")
-	go m.readOutput(stderr, "stderr")
-
-	_ = cmd.Wait()
-}
-
-// readOutput reads and logs output from the container
+// readOutput reads and logs output from the subprocess
 func (m *BridgeManager) readOutput(r io.Reader, name string) {
 	buf := make([]byte, 4096)
 	for {
@@ -276,7 +255,7 @@ func (m *BridgeManager) readOutput(r io.Reader, name string) {
 
 // waitForReady waits for the bridge API to be ready
 func (m *BridgeManager) waitForReady(ctx context.Context) error {
-	timeout := time.After(90 * time.Second) // Longer timeout for container startup
+	timeout := time.After(90 * time.Second)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -287,19 +266,11 @@ func (m *BridgeManager) waitForReady(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timeout:
-			return fmt.Errorf("timeout waiting for container to start")
+			return fmt.Errorf("timeout waiting for wyze-bridge to start")
 		case <-ticker.C:
-			// Check if container is still running
-			checkCmd := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", m.containerName)
-			output, err := checkCmd.Output()
-			if err != nil {
-				return fmt.Errorf("container failed to start")
-			}
-			if strings.TrimSpace(string(output)) != "true" {
-				// Get logs for debugging
-				logsCmd := exec.CommandContext(ctx, "docker", "logs", "--tail", "50", m.containerName)
-				logs, _ := logsCmd.CombinedOutput()
-				return fmt.Errorf("container is not running. Last logs:\n%s", string(logs))
+			// Check if process is still running
+			if !m.IsRunning() {
+				return fmt.Errorf("wyze-bridge process exited unexpectedly")
 			}
 
 			// Check API
@@ -314,7 +285,7 @@ func (m *BridgeManager) waitForReady(ctx context.Context) error {
 	}
 }
 
-// Stop shuts down the wyze-bridge container
+// Stop shuts down the wyze-bridge subprocess
 func (m *BridgeManager) Stop() error {
 	m.runningMu.Lock()
 	if !m.running {
@@ -326,37 +297,38 @@ func (m *BridgeManager) Stop() error {
 
 	close(m.stopCh)
 
-	log.Println("Stopping wyze-bridge container...")
-	cmd := exec.Command("docker", "stop", "-t", "10", m.containerName)
-	if err := cmd.Run(); err != nil {
-		log.Printf("Warning: failed to stop container gracefully: %v", err)
-		// Force remove
-		_ = exec.Command("docker", "rm", "-f", m.containerName).Run()
+	if m.cmd != nil && m.cmd.Process != nil {
+		log.Println("Stopping wyze-bridge subprocess...")
+		// Send SIGTERM first
+		if err := m.cmd.Process.Signal(os.Interrupt); err != nil {
+			log.Printf("Failed to send interrupt signal: %v", err)
+		}
+
+		// Wait briefly for graceful shutdown
+		done := make(chan struct{})
+		go func() {
+			m.cmd.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			log.Println("wyze-bridge stopped gracefully")
+		case <-time.After(10 * time.Second):
+			log.Println("wyze-bridge did not stop gracefully, killing...")
+			m.cmd.Process.Kill()
+		}
 	}
 
-	// Remove the stopped container
-	_ = exec.Command("docker", "rm", m.containerName).Run()
-
-	log.Println("Wyze-bridge container stopped")
+	log.Println("Wyze-bridge subprocess stopped")
 	return nil
 }
 
-// IsRunning returns whether the container is running
+// IsRunning returns whether the subprocess is running
 func (m *BridgeManager) IsRunning() bool {
 	m.runningMu.RLock()
 	defer m.runningMu.RUnlock()
-
-	if !m.running {
-		return false
-	}
-
-	// Also check with Docker
-	cmd := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", m.containerName)
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(output)) == "true"
+	return m.running
 }
 
 // GetRTSPURL returns the RTSP URL for a camera
