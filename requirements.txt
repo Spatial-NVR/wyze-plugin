@@ -1,0 +1,6 @@
+# Wyze camera library dependencies
+# These are installed in a venv by the plugin
+
+pydantic>=2.0.0
+requests>=2.28.0
+xxtea>=2.0.0

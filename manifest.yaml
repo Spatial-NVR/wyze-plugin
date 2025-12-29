@@ -1,21 +1,19 @@
 id: wyze
 name: Wyze
-version: 1.4.0
-description: Self-contained Wyze camera integration. Downloads wyze-bridge and TUTK library automatically for P2P RTSP streaming.
+version: 2.0.0
+description: Wyze camera integration using wyzecam library directly for P2P streaming (like Scrypted)
 author: SpatialNVR
 homepage: https://github.com/Spatial-NVR/wyze-plugin
 license: MIT
 
 runtime:
-  type: binary
-  binary: wyze-plugin
+  type: python
+  script: wyze_plugin.py
+  setup: setup.sh
 
 capabilities:
   - video
   - audio
-  - two_way_audio
-  - motion
-  - snapshot
   - ptz
 
 config_schema:
@@ -33,40 +31,17 @@ config_schema:
     key_id:
       type: string
       title: API Key ID
-      description: Wyze Developer API key ID (optional, improves reliability)
+      description: Wyze Developer API key ID (recommended for reliability)
     api_key:
       type: string
       title: API Key
-      description: Wyze Developer API key (optional)
-      format: password
-    totp_key:
-      type: string
-      title: TOTP Secret
-      description: Base32 TOTP secret for 2FA (optional, required if 2FA is enabled)
+      description: Wyze Developer API key
       format: password
     rtsp_port:
       type: integer
       title: RTSP Port
-      description: Port for RTSP streams (default 8564, avoids go2rtc conflict)
+      description: Starting port for camera streams (default 8564)
       default: 8564
-    web_port:
-      type: integer
-      title: Web UI Port
-      description: Port for wyze-bridge web interface (default 5002)
-      default: 5002
-    cameras:
-      type: array
-      title: Camera Filter
-      description: Specific cameras to enable (leave empty for all cameras)
-      items:
-        type: object
-        properties:
-          mac:
-            type: string
-            description: Camera MAC address
-          name:
-            type: string
-            description: Custom display name
   required:
     - email
     - password
