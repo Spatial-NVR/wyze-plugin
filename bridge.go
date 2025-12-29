@@ -35,8 +35,8 @@ const (
 	WyzeBridgeRepo = "mrlt8/docker-wyze-bridge"
 
 	// TUTKLibraryURL is the URL to download the TUTK library for P2P camera connections
-	// This is required for the wyzecam library to work
-	TUTKLibraryURL = "https://github.com/mrlt8/docker-wyze-bridge/raw/main/docker/tutk/lib/x86_64/libIOTCAPIs_ALL.so"
+	// This is required for the wyzecam library to work (library is in app/lib/ with arch-specific names)
+	TUTKLibraryURL = "https://github.com/mrlt8/docker-wyze-bridge/raw/main/app/lib/lib.amd64"
 )
 
 // BridgeConfig holds configuration for the wyze-bridge
@@ -139,14 +139,10 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		return fmt.Errorf("failed to setup wyze-bridge: %w", err)
 	}
 
-	// Check if wyze-bridge is available
-	wyzeBridgeScript := filepath.Join(m.bridgePath, "app", "wyze-bridge")
+	// Check if wyze-bridge is available (main script is wyze_bridge.py)
+	wyzeBridgeScript := filepath.Join(m.bridgePath, "app", "wyze_bridge.py")
 	if _, err := os.Stat(wyzeBridgeScript); os.IsNotExist(err) {
-		// Try alternative location
-		wyzeBridgeScript = filepath.Join(m.bridgePath, "app", "run.py")
-		if _, err := os.Stat(wyzeBridgeScript); os.IsNotExist(err) {
-			return fmt.Errorf("wyze-bridge not found at %s after download", m.bridgePath)
-		}
+		return fmt.Errorf("wyze-bridge not found at %s after download", wyzeBridgeScript)
 	}
 
 	// Ensure data directories exist
@@ -202,13 +198,9 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		env = append(env, fmt.Sprintf("FILTER_NAMES=%s", strings.Join(config.Cameras, ",")))
 	}
 
-	// Determine how to run wyze-bridge
-	var cmd *exec.Cmd
-	if strings.HasSuffix(wyzeBridgeScript, ".py") {
-		cmd = exec.CommandContext(ctx, "python3", wyzeBridgeScript)
-	} else {
-		cmd = exec.CommandContext(ctx, wyzeBridgeScript)
-	}
+	// Run wyze-bridge using the venv's python
+	venvPython := m.getVenvPython()
+	cmd := exec.CommandContext(ctx, venvPython, wyzeBridgeScript)
 	cmd.Dir = filepath.Join(m.bridgePath, "app")
 	cmd.Env = env
 
@@ -407,8 +399,8 @@ func (m *BridgeManager) ensureWyzeBridge(ctx context.Context) error {
 	}
 
 	// Make scripts executable
-	_ = os.Chmod(filepath.Join(appDir, "wyze-bridge"), 0755)
-	_ = os.Chmod(filepath.Join(appDir, "run.py"), 0755)
+	_ = os.Chmod(filepath.Join(appDir, "wyze_bridge.py"), 0755)
+	_ = os.Chmod(filepath.Join(appDir, "frontend.py"), 0755)
 
 	log.Printf("wyze-bridge %s installed successfully", WyzeBridgeVersion)
 	return nil
@@ -511,10 +503,11 @@ func (m *BridgeManager) extractTarGz(r io.Reader, dest string) error {
 	return nil
 }
 
-// installDependencies installs Python dependencies for wyze-bridge
+// installDependencies installs Python dependencies for wyze-bridge using a virtual environment
 func (m *BridgeManager) installDependencies(ctx context.Context) error {
 	appDir := filepath.Join(m.bridgePath, "app")
 	requirementsFile := filepath.Join(appDir, "requirements.txt")
+	venvDir := filepath.Join(m.bridgePath, "venv")
 
 	// Check if requirements.txt exists
 	if _, err := os.Stat(requirementsFile); os.IsNotExist(err) {
@@ -522,31 +515,41 @@ func (m *BridgeManager) installDependencies(ctx context.Context) error {
 		return nil
 	}
 
+	// Check if venv already exists
+	venvPython := filepath.Join(venvDir, "bin", "python3")
+	if _, err := os.Stat(venvPython); err == nil {
+		log.Printf("Python virtual environment already exists")
+		return nil
+	}
+
+	log.Printf("Creating Python virtual environment...")
+
+	// Create virtual environment
+	venvCmd := exec.CommandContext(ctx, "python3", "-m", "venv", venvDir)
+	venvCmd.Dir = m.bridgePath
+	if output, err := venvCmd.CombinedOutput(); err != nil {
+		log.Printf("venv creation output: %s", string(output))
+		return fmt.Errorf("failed to create venv: %w", err)
+	}
+
 	log.Printf("Installing Python dependencies...")
 
-	// Determine pip command
-	pip := "pip3"
-	if runtime.GOOS == "darwin" {
-		// On macOS, might need to use python3 -m pip
-		pip = "python3"
-	}
-
-	var cmd *exec.Cmd
-	if pip == "python3" {
-		cmd = exec.CommandContext(ctx, pip, "-m", "pip", "install", "--user", "-r", requirementsFile)
-	} else {
-		cmd = exec.CommandContext(ctx, pip, "install", "--user", "-r", requirementsFile)
-	}
-
-	cmd.Dir = appDir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	// Install dependencies using the venv's pip
+	venvPip := filepath.Join(venvDir, "bin", "pip")
+	pipCmd := exec.CommandContext(ctx, venvPip, "install", "-r", requirementsFile)
+	pipCmd.Dir = appDir
+	if output, err := pipCmd.CombinedOutput(); err != nil {
 		log.Printf("pip install output: %s", string(output))
 		return fmt.Errorf("pip install failed: %w", err)
 	}
 
 	log.Printf("Python dependencies installed successfully")
 	return nil
+}
+
+// getVenvPython returns the path to the venv's python executable
+func (m *BridgeManager) getVenvPython() string {
+	return filepath.Join(m.bridgePath, "venv", "bin", "python3")
 }
 
 // Stop shuts down the wyze-bridge subprocess
