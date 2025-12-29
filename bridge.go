@@ -171,9 +171,10 @@ func (m *BridgeManager) Start(ctx context.Context, config BridgeConfig) error {
 		fmt.Sprintf("WB_PORT=%d", m.webPort),
 		// Set MediaMTX ports directly to avoid conflicts with go2rtc (8554/8555)
 		fmt.Sprintf("MTX_RTSPADDRESS=:%d", m.rtspPort),
-		"MTX_WEBRTCADDRESS=:8561",  // go2rtc uses 8555
-		"MTX_HLSADDRESS=:8562",     // Avoid any HLS conflicts
-		"MTX_RTMPADDRESS=",         // Disable RTMP (not needed)
+		"MTX_WEBRTCADDRESS=:8561",           // go2rtc uses 8555
+		"MTX_WEBRTCICEUDPMUXADDRESS=:8563",  // WebRTC ICE UDP (avoid 8189 conflict)
+		"MTX_HLSADDRESS=:8562",              // Avoid any HLS conflicts
+		"MTX_RTMPADDRESS=",                  // Disable RTMP (not needed)
 		fmt.Sprintf("TOKEN_PATH=%s/", tokenPath),
 		fmt.Sprintf("IMG_PATH=%s/", imgPath),
 		fmt.Sprintf("MTX_CONFIG=%s", mtxConfigPath),
