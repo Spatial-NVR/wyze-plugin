@@ -103,6 +103,41 @@ def save_config(config: Dict[str, Any]):
         json.dump(config, f, indent=2)
 
 
+def load_auth_cache() -> Optional[Dict[str, Any]]:
+    """Load cached authentication data"""
+    cache_path = os.path.join(PLUGIN_DIR, "auth_cache.json")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path) as f:
+                cache = json.load(f)
+                # Check if cache is still valid (tokens expire, but we cache for 1 hour)
+                cached_time = cache.get("cached_at", 0)
+                if time.time() - cached_time < 3600:  # 1 hour cache
+                    return cache
+        except Exception as e:
+            log(f"Failed to load auth cache: {e}")
+    return None
+
+
+def save_auth_cache(auth_info: Any, account: Any, cameras: Dict[str, Any]):
+    """Save authentication data to cache"""
+    cache_path = os.path.join(PLUGIN_DIR, "auth_cache.json")
+    try:
+        # Serialize auth info and cameras
+        cache = {
+            "cached_at": time.time(),
+            "auth_info": auth_info.model_dump() if hasattr(auth_info, 'model_dump') else auth_info.__dict__,
+            "account": account.model_dump() if hasattr(account, 'model_dump') else account.__dict__,
+            "cameras": {mac: (cam.model_dump() if hasattr(cam, 'model_dump') else cam.__dict__)
+                       for mac, cam in cameras.items()}
+        }
+        with open(cache_path, "w") as f:
+            json.dump(cache, f, indent=2)
+        log("Auth cache saved")
+    except Exception as e:
+        log(f"Failed to save auth cache: {e}")
+
+
 class WyzeAuth:
     """Manages Wyze authentication"""
 
@@ -112,8 +147,23 @@ class WyzeAuth:
         self.account: Optional[wyzecam.WyzeAccount] = None
         self.cameras: Dict[str, wyzecam.WyzeCamera] = {}
 
-    def login(self):
-        """Login to Wyze and get camera list"""
+    def login(self, use_cache: bool = True):
+        """Login to Wyze and get camera list (with caching)"""
+        # Try to use cached auth first
+        if use_cache:
+            cache = load_auth_cache()
+            if cache:
+                try:
+                    log("Using cached authentication")
+                    self.auth_info = wyzecam.WyzeCredential.model_validate(cache["auth_info"])
+                    self.account = wyzecam.WyzeAccount.model_validate(cache["account"])
+                    for mac, cam_data in cache["cameras"].items():
+                        self.cameras[mac] = wyzecam.WyzeCamera.model_validate(cam_data)
+                    log(f"Loaded {len(self.cameras)} cameras from cache")
+                    return self
+                except Exception as e:
+                    log(f"Cache load failed, will re-authenticate: {e}")
+
         email = self.config.get("email")
         password = self.config.get("password")
         key_id = self.config.get("key_id")
@@ -136,6 +186,9 @@ class WyzeAuth:
         for camera in camera_list:
             self.cameras[camera.mac] = camera
             log(f"Found camera: {camera.nickname} ({camera.mac}) - {camera.product_model}")
+
+        # Save to cache
+        save_auth_cache(self.auth_info, self.account, self.cameras)
 
         return self
 
