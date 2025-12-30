@@ -1,6 +1,6 @@
 id: wyze
 name: Wyze
-version: 2.0.4
+version: 2.0.5
 description: Wyze camera integration using wyzecam library directly for P2P streaming (like Scrypted)
 author: SpatialNVR
 homepage: https://github.com/Spatial-NVR/wyze-plugin

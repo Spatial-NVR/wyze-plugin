@@ -116,11 +116,11 @@ class WyzePlugin:
             self.cameras[camera.mac] = camera
             log(f"Found camera: {camera.nickname} ({camera.mac})")
 
-            # Start stream server for each camera
+            # Start stream server for each camera (using shared TUTK instance)
             stream = CameraStream(
                 camera=camera,
                 account=self.account,
-                tutk_lib=self.tutk_platform_lib,
+                wyze_iotc=self.wyze_iotc,
                 port=self.rtsp_port + len(self.camera_streams)
             )
             self.camera_streams[camera.mac] = stream
@@ -342,12 +342,12 @@ class CameraStream:
         self,
         camera: wyzecam.WyzeCamera,
         account: wyzecam.WyzeAccount,
-        tutk_lib: str,
+        wyze_iotc: wyzecam.WyzeIOTC,
         port: int
     ):
         self.camera = camera
         self.account = account
-        self.tutk_lib = tutk_lib
+        self.wyze_iotc = wyze_iotc  # Shared, already-initialized TUTK instance
         self.port = port
         self.is_connected = False
         self.running = False
@@ -416,15 +416,7 @@ class CameraStream:
 
     async def _stream_to_client(self, writer: asyncio.StreamWriter):
         """Stream video/audio to client using TUTK P2P"""
-        # Create WyzeIOTC wrapper for this connection
-        # Note: We don't call initialize() here - the plugin already initialized
-        # the TUTK library globally during startup
-        wyze_iotc = wyzecam.WyzeIOTC(
-            tutk_platform_lib=self.tutk_lib,
-            sdk_key=SDK_KEY,
-            max_num_av_channels=32,
-        )
-
+        # Use the shared, already-initialized TUTK instance
         frame_size = FRAME_SIZE_2K if self.camera.is_2k else FRAME_SIZE_1080P
         bitrate = 240 if self.camera.is_2k else 160
 
@@ -435,7 +427,7 @@ class CameraStream:
             nonlocal closed
             try:
                 with wyzecam.WyzeIOTCSession(
-                    wyze_iotc.tutk_platform_lib,
+                    self.wyze_iotc.tutk_platform_lib,
                     self.account,
                     self.camera,
                     frame_size=frame_size,
