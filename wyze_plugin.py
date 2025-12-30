@@ -29,6 +29,9 @@ WYZE_BRIDGE_DIR = os.path.join(PLUGIN_DIR, "wyze-bridge", "app")
 if os.path.exists(WYZE_BRIDGE_DIR):
     sys.path.insert(0, WYZE_BRIDGE_DIR)
 
+# Virtual environment Python path (used for go2rtc exec streams)
+VENV_PYTHON = os.path.join(PLUGIN_DIR, "venv", "bin", "python3")
+
 import wyzecam
 from wyzecam.iotc import WyzeIOTC, WyzeIOTCSession
 
@@ -322,14 +325,14 @@ class WyzePlugin:
         """Get the stream URL for a camera using exec source"""
         # Use exec: source so go2rtc runs FFmpeg to read our raw H264 output
         plugin_path = os.path.abspath(__file__)
-        # go2rtc exec format: ffmpeg reads from our script's stdout
-        return f"exec:ffmpeg -hide_banner -loglevel error -f h264 -i $(python3 {plugin_path} stream {camera.mac}) -c:v copy -f rtsp {{output}}"
+        # go2rtc exec format: ffmpeg reads from our script's stdout (use venv python)
+        return f"exec:ffmpeg -hide_banner -loglevel error -f h264 -i $({VENV_PYTHON} {plugin_path} stream {camera.mac}) -c:v copy -f rtsp {{output}}"
 
     def _get_stream_url_simple(self, camera: wyzecam.WyzeCamera) -> str:
         """Get simple exec stream URL"""
         plugin_path = os.path.abspath(__file__)
-        # Direct exec - our script outputs H264, go2rtc wraps with FFmpeg
-        return f"exec:python3 {plugin_path} stream {camera.mac}#video=h264"
+        # Direct exec - use venv python so dependencies are available
+        return f"exec:{VENV_PYTHON} {plugin_path} stream {camera.mac}#video=h264"
 
     def list_cameras(self) -> List[Dict[str, Any]]:
         """Return list of configured cameras with stream URLs"""
@@ -338,9 +341,9 @@ class WyzePlugin:
 
         result = []
         for mac, camera in self.auth.cameras.items():
-            # Use exec source for go2rtc
+            # Use exec source for go2rtc with venv python
             plugin_path = os.path.abspath(__file__)
-            stream_url = f"exec:python3 {plugin_path} stream {mac}#video=h264"
+            stream_url = f"exec:{VENV_PYTHON} {plugin_path} stream {mac}#video=h264"
 
             result.append({
                 "id": camera.mac,
@@ -375,7 +378,7 @@ class WyzePlugin:
             return None
 
         plugin_path = os.path.abspath(__file__)
-        stream_url = f"exec:python3 {plugin_path} stream {mac}#video=h264"
+        stream_url = f"exec:{VENV_PYTHON} {plugin_path} stream {mac}#video=h264"
 
         return {
             "id": camera.mac,
