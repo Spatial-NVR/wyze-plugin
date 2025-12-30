@@ -254,6 +254,34 @@ class WyzePlugin:
                 return cam
         return None
 
+    def add_camera(self, mac: str, name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Add a camera by MAC address - returns camera info with stream URL.
+
+        Since all cameras are auto-started during initialize(), this just
+        returns the camera data for the NVR to register it.
+        """
+        camera = self.cameras.get(mac)
+        if not camera:
+            return None
+
+        stream = self.camera_streams.get(mac)
+        rtsp_url = f"rtsp://127.0.0.1:{stream.port}/{camera.mac}" if stream else ""
+
+        return {
+            "id": camera.mac,
+            "plugin_id": "wyze",
+            "name": name or camera.nickname,
+            "model": camera.model_name,
+            "manufacturer": "Wyze",
+            "host": camera.ip or "",
+            "main_stream": rtsp_url,
+            "sub_stream": "",
+            "snapshot_url": "",
+            "capabilities": self._get_capabilities(camera),
+            "online": stream.is_connected if stream else False,
+            "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
     def _get_capabilities(self, camera: wyzecam.WyzeCamera) -> List[str]:
         """Get camera capabilities"""
         caps = ["video", "audio"]
@@ -290,6 +318,14 @@ class WyzePlugin:
                     response["result"] = result
                 else:
                     response["error"] = {"code": -32603, "message": "Camera not found"}
+            elif method == "add_camera":
+                mac = params.get("mac")
+                name = params.get("name")
+                result = self.add_camera(mac, name)
+                if result:
+                    response["result"] = result
+                else:
+                    response["error"] = {"code": -32603, "message": f"Camera not found: {mac}"}
             else:
                 response["error"] = {"code": -32601, "message": f"Method not found: {method}"}
         except Exception as e:
@@ -380,12 +416,14 @@ class CameraStream:
 
     async def _stream_to_client(self, writer: asyncio.StreamWriter):
         """Stream video/audio to client using TUTK P2P"""
+        # Create WyzeIOTC wrapper for this connection
+        # Note: We don't call initialize() here - the plugin already initialized
+        # the TUTK library globally during startup
         wyze_iotc = wyzecam.WyzeIOTC(
             tutk_platform_lib=self.tutk_lib,
             sdk_key=SDK_KEY,
             max_num_av_channels=32,
         )
-        wyze_iotc.initialize()
 
         frame_size = FRAME_SIZE_2K if self.camera.is_2k else FRAME_SIZE_1080P
         bitrate = 240 if self.camera.is_2k else 160
@@ -434,7 +472,7 @@ class CameraStream:
                 await writer.drain()
         finally:
             closed = True
-            wyze_iotc.deinitialize()
+            # Don't deinitialize - it's a global resource
 
 
 def main():
