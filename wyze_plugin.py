@@ -249,7 +249,14 @@ def stream_camera(mac: str):
     except KeyboardInterrupt:
         log("Stream interrupted")
     except Exception as e:
-        log(f"Stream error: {format_exception(e)}")
+        # Log error details on separate lines to avoid truncation
+        log(f"Stream error type: {type(e).__name__}")
+        log(f"Stream error message: {str(e)}")
+        # Log traceback lines individually
+        for line in traceback.format_exception(e):
+            for subline in line.strip().split('\n'):
+                if subline.strip():
+                    log(f"  {subline}")
     finally:
         try:
             iotc.deinitialize()
