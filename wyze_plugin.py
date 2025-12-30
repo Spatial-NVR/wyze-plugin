@@ -172,6 +172,15 @@ def stream_camera(mac: str):
         sys.exit(1)
 
     log(f"Connecting to {camera.nickname}...")
+    log(f"Camera details: p2p_id={getattr(camera, 'p2p_id', 'N/A')}, model={camera.product_model}, enr={getattr(camera, 'enr', 'N/A')[:8] if hasattr(camera, 'enr') and camera.enr else 'N/A'}...")
+
+    # Check required camera fields
+    if not getattr(camera, 'p2p_id', None):
+        log(f"ERROR: Camera {camera.nickname} missing p2p_id - cannot connect via P2P")
+        sys.exit(1)
+    if not getattr(camera, 'enr', None):
+        log(f"ERROR: Camera {camera.nickname} missing enr - cannot authenticate")
+        sys.exit(1)
 
     # Get TUTK library
     tutk_lib = get_tutk_library()
