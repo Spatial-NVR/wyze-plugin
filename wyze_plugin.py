@@ -68,8 +68,8 @@ def get_tutk_library() -> Optional[str]:
     if os.path.exists(lib_path):
         return lib_path
 
-    # Download from docker-wyze-bridge
-    url = f"https://github.com/mrlt8/docker-wyze-bridge/raw/main/app/lib.{suffix}"
+    # Download from docker-wyze-bridge (lib files are in app/lib/ subdirectory)
+    url = f"https://github.com/mrlt8/docker-wyze-bridge/raw/main/app/lib/lib.{suffix}"
     log(f"Downloading TUTK library from {url}...")
 
     try:
