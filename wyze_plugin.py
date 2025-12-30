@@ -225,7 +225,9 @@ def stream_camera(mac: str):
         sys.exit(1)
 
     log(f"Connecting to {camera.nickname}...")
-    log(f"Camera details: p2p_id={getattr(camera, 'p2p_id', 'N/A')}, model={camera.product_model}, enr={getattr(camera, 'enr', 'N/A')[:8] if hasattr(camera, 'enr') and camera.enr else 'N/A'}...")
+    log(f"Camera p2p_id={getattr(camera, 'p2p_id', 'N/A')}, model={camera.product_model}")
+    log(f"Camera dtls={getattr(camera, 'dtls', 'N/A')}, parent_dtls={getattr(camera, 'parent_dtls', 'N/A')}")
+    log(f"Camera enr={getattr(camera, 'enr', 'N/A')[:8] if hasattr(camera, 'enr') and camera.enr else 'N/A'}...")
 
     # Check required camera fields
     if not getattr(camera, 'p2p_id', None):
@@ -282,12 +284,14 @@ def stream_camera(mac: str):
     # via exec:ffmpeg ... -f h264 pipe: format
 
     try:
+        log("Starting TUTK P2P connection (timeout=30s)...")
         with WyzeIOTCSession(
             iotc.tutk_platform_lib,
             auth.account,
             camera,
             frame_size=frame_size,
             bitrate=bitrate,
+            connect_timeout=30,  # Increase timeout from default 20s
         ) as session:
             log(f"Connected to {camera.nickname}, starting stream...")
 
