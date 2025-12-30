@@ -180,18 +180,31 @@ class WyzePlugin:
 
     def health(self) -> Dict[str, Any]:
         """Return health status"""
-        online = sum(1 for s in self.camera_streams.values() if s.is_connected)
+        # Count cameras with active stream servers (ready to accept connections)
+        servers_running = sum(1 for s in self.camera_streams.values() if s.running)
+        active_connections = sum(1 for s in self.camera_streams.values() if s.is_connected)
         total = len(self.cameras)
 
-        state = "healthy" if online == total else ("degraded" if online > 0 else "unhealthy")
+        # Plugin is healthy if authenticated and all stream servers are running
+        # Cameras don't need active connections to be "healthy" - they connect on-demand
+        if not self.auth_info:
+            state = "unhealthy"
+            message = "Not authenticated to Wyze"
+        elif servers_running < total:
+            state = "degraded"
+            message = f"{servers_running}/{total} stream servers running"
+        else:
+            state = "healthy"
+            message = f"{total} cameras ready, {active_connections} streaming"
 
         return {
             "state": state,
-            "message": f"{online}/{total} cameras connected",
+            "message": message,
             "last_check": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "details": {
-                "cameras_online": online,
                 "cameras_total": total,
+                "servers_running": servers_running,
+                "active_streams": active_connections,
                 "authenticated": self.auth_info is not None,
             }
         }
