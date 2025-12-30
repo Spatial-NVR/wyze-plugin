@@ -1,6 +1,6 @@
 id: wyze
 name: Wyze
-version: 2.0.6
+version: 2.0.7
 description: Wyze camera integration using wyzecam library directly for P2P streaming (like Scrypted)
 author: SpatialNVR
 homepage: https://github.com/Spatial-NVR/wyze-plugin
@@ -10,6 +10,9 @@ runtime:
   type: python
   script: wyze_plugin.py
   setup: setup.sh
+  env:
+    - APP_VERSION=3.1.6.1
+    - IOS_VERSION=17.1.1
 
 capabilities:
   - video
