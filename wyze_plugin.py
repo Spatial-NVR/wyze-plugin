@@ -24,6 +24,11 @@ import urllib.request
 from ctypes import c_int
 from typing import Any, Dict, List, Optional
 
+# Set required environment variables BEFORE importing wyzecam
+# These are used by the wyzecam API for User-Agent and authentication
+os.environ.setdefault("APP_VERSION", "3.1.6.1")
+os.environ.setdefault("IOS_VERSION", "17.1.1")
+
 # Add wyzecam to path (downloaded to plugin directory)
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 WYZECAM_DIR = os.path.join(PLUGIN_DIR, "wyzecam")
